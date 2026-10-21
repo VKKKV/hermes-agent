@@ -50,20 +50,12 @@ _TOOL_CALL_BLOCK_PATTERNS = tuple(
     for name in _TOOL_CALL_TAG_NAMES
 )
 
-# DeepSeek native DSML tool-call serialization leaks into visible text via
-# OpenRouter and other OpenAI-compatible hosts (fullwidth pipes U+FF5C, sometimes
-# ASCII |) — #119261, #54283. Same fail-soft as ASCII tool-call XML: closed blocks,
-# orphan closers, cut tails. Stripping (not parsing) is deliberate: tool-call
-# extraction is the endpoint's job (#15453 ruling); this only keeps the markup off
-# the user's screen and out of replayed history, where it teaches the model to keep
-# writing calls as text (can1357/oh-my-pi#10556). ``function_calls`` is the
-# chat-template spelling Bedrock's deepseek.v3.2 leaks beside a valid toolUse block.
+# DSML leaked by compatible providers is not visible assistant content.
 _DSML_PIPE = r'[|\uFF5C]{1,2}[ \t]*'
 _DSML_KINDS = r'(?:calls|tool_calls|function_calls|invoke|parameter)'
 _DSML_BLOCK_PATTERN = re.compile(
     rf'<{_DSML_PIPE}DSML{_DSML_PIPE}(calls|tool_calls|function_calls|invoke|parameter)(?=[\s>])[^>]*>'
-    # Stop at another same-kind opener, including attributes: avoid rescanning
-    # every suffix of a repeated unclosed opener (quadratic on long responses).
+    # Stop at repeated openers to avoid quadratic suffix scans.
     rf'(?:(?!</?{_DSML_PIPE}DSML{_DSML_PIPE}\1(?=[\s>])).)*'
     rf'</{_DSML_PIPE}DSML{_DSML_PIPE}\1>',
     re.DOTALL | re.IGNORECASE,
@@ -72,17 +64,12 @@ _DSML_BLOCK_PATTERN = re.compile(
 _DSML_ORPHAN_CLOSER_PATTERN = re.compile(
     rf'</{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}>[ \t]*(?=\r?$|</)', re.IGNORECASE | re.MULTILINE
 )
-# A DSML opener with no closer means the stream was cut mid-serialization
-# (#101899 analog). The call can't be recovered; strip to end of text. The
-# opener may itself be cut before its ``>`` (Bedrock: ``<｜DSML｜function_calls``
-# as the last bytes of the text channel), so only the tag name is required.
 _DSML_UNTERMINATED_PATTERN = re.compile(
     rf'(?:^|\n)[ \t]*<{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}(?=[\s>]|\Z).*$',
     re.DOTALL | re.IGNORECASE,
 )
 
-# Protocol-shaped line openers or closers are a dropped tool attempt, not a final
-# answer. This also catches payloads whose opener was lost by the provider.
+# Unexecuted protocol payload, including orphan trailing closers.
 _DSML_LEAK_PATTERN = re.compile(
     rf'(?:^|\n)[ \t]*<{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}(?=[\s>]|\Z)'
     rf'|</{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}>\s*\Z', re.IGNORECASE,

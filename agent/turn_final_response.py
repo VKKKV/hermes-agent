@@ -85,10 +85,7 @@ def finish_text_response(
             result=result,
         )
 
-    # A no-tool DSML fragment is an unexecuted tool attempt, not completion.
-    # Discard its untrusted payload and reuse the existing bounded empty-response
-    # ladder. Sanitizing only the closers would leave Python/shell arguments as a
-    # plausible final answer. Do not recover it from the streamed-text fallback.
+    # A leaked tool attempt must retry, not complete or recover from a cache.
     from agent.agent_runtime_helpers import _DSML_LEAK_PATTERN
     _dsml_candidates = [assistant_message.content]
     if not agent._has_content_after_think_block(assistant_message.content or ""):
