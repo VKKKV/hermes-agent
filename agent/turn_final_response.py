@@ -85,6 +85,23 @@ def finish_text_response(
             result=result,
         )
 
+    # A no-tool DSML fragment is an unexecuted tool attempt, not completion.
+    # Discard its untrusted payload and reuse the existing bounded empty-response
+    # ladder. Sanitizing only the closers would leave Python/shell arguments as a
+    # plausible final answer. Do not recover it from the streamed-text fallback.
+    from agent.agent_runtime_helpers import _DSML_LEAK_PATTERN
+    _dsml_leaked = bool(
+        not assistant_message.tool_calls
+        and isinstance(assistant_message.content, str)
+        and _DSML_LEAK_PATTERN.search(assistant_message.content)
+    )
+    if _dsml_leaked:
+        logger.warning("Unparsed DSML tool attempt: entering empty-response recovery")
+        assistant_message.content = ""
+        agent._current_streamed_assistant_text = ""
+        agent._last_content_with_tools = None
+        agent._last_content_tools_all_housekeeping = False
+
     # Reasoning-only clean stop on a trusted route (elsewhere reasoning is private and takes the
     # ladder): some parsers (vLLM nemotron_v3 past ~500K prompt tokens) file the whole answer as
     # reasoning when the closing delimiter is missing; ``stop`` means generation is complete, so
@@ -101,6 +118,7 @@ def finish_text_response(
     _promoted = None
     if (
         finish_reason == "stop"
+        and not _dsml_leaked
         and not assistant_message.tool_calls
         and (_content is None or (isinstance(_content, str) and not _content.strip()))
         and not any(
