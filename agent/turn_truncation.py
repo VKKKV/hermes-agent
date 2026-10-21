@@ -314,6 +314,14 @@ def _continue_text(st: _Trunc, _retry: TurnRetryState, assistant_message: Any) -
     st.length_continue_retries += 1
     n = st.length_continue_retries
     _interim_content = getattr(assistant_message, "content", None)
+    from agent.agent_runtime_helpers import _DSML_LEAK_PATTERN
+    if isinstance(_interim_content, str) and _DSML_LEAK_PATTERN.search(_interim_content):
+        # An unexecuted tool serialization is not a recoverable answer fragment.
+        # Keep the existing bounded length retry, but never stitch/replay its body.
+        _interim_content = None
+        agent._current_streamed_assistant_text = ""
+        agent._last_content_with_tools = None
+        agent._last_content_tools_all_housekeeping = False
     if not _interim_content and not st.is_stub:
         # Thinking-only truncation: continuing with thinking ON re-burns the budget.
         agent._ephemeral_reasoning_off = True

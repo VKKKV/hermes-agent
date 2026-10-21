@@ -90,10 +90,18 @@ def finish_text_response(
     # ladder. Sanitizing only the closers would leave Python/shell arguments as a
     # plausible final answer. Do not recover it from the streamed-text fallback.
     from agent.agent_runtime_helpers import _DSML_LEAK_PATTERN
-    _dsml_leaked = bool(
-        not assistant_message.tool_calls
-        and isinstance(assistant_message.content, str)
-        and _DSML_LEAK_PATTERN.search(assistant_message.content)
+    _dsml_candidates = [assistant_message.content]
+    if not agent._has_content_after_think_block(assistant_message.content or ""):
+        # Only consult alternate sources when they could become the answer;
+        # private reasoning or a stale cache must not discard a valid reply.
+        _dsml_candidates.extend((
+            agent._extract_reasoning(assistant_message),
+            getattr(agent, "_current_streamed_assistant_text", ""),
+            getattr(agent, "_last_content_with_tools", ""),
+        ))
+    _dsml_leaked = not assistant_message.tool_calls and any(
+        isinstance(candidate, str) and _DSML_LEAK_PATTERN.search(candidate)
+        for candidate in _dsml_candidates
     )
     if _dsml_leaked:
         logger.warning("Unparsed DSML tool attempt: entering empty-response recovery")

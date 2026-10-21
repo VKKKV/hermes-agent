@@ -61,28 +61,31 @@ _TOOL_CALL_BLOCK_PATTERNS = tuple(
 _DSML_PIPE = r'[|\uFF5C]{1,2}[ \t]*'
 _DSML_KINDS = r'(?:calls|tool_calls|function_calls|invoke|parameter)'
 _DSML_BLOCK_PATTERN = re.compile(
-    rf'<{_DSML_PIPE}DSML{_DSML_PIPE}(calls|tool_calls|function_calls|invoke|parameter)\b[^>]*>'
-    rf'(?:(?!</?{_DSML_PIPE}DSML{_DSML_PIPE}\1>).)*'
+    rf'<{_DSML_PIPE}DSML{_DSML_PIPE}(calls|tool_calls|function_calls|invoke|parameter)(?=[\s>])[^>]*>'
+    # Stop at another same-kind opener, including attributes: avoid rescanning
+    # every suffix of a repeated unclosed opener (quadratic on long responses).
+    rf'(?:(?!</?{_DSML_PIPE}DSML{_DSML_PIPE}\1(?=[\s>])).)*'
     rf'</{_DSML_PIPE}DSML{_DSML_PIPE}\1>',
     re.DOTALL | re.IGNORECASE,
 )
+# Only a trailing protocol envelope, not a backtick-quoted inline explanation.
 _DSML_ORPHAN_CLOSER_PATTERN = re.compile(
-    rf'</{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}>\s*', re.IGNORECASE
+    rf'</{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}>[ \t]*(?=\r?$|</)', re.IGNORECASE | re.MULTILINE
 )
 # A DSML opener with no closer means the stream was cut mid-serialization
 # (#101899 analog). The call can't be recovered; strip to end of text. The
 # opener may itself be cut before its ``>`` (Bedrock: ``<｜DSML｜function_calls``
 # as the last bytes of the text channel), so only the tag name is required.
 _DSML_UNTERMINATED_PATTERN = re.compile(
-    rf'(?:^|\n)[ \t]*<{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}\b.*$',
+    rf'(?:^|\n)[ \t]*<{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}(?=[\s>]|\Z).*$',
     re.DOTALL | re.IGNORECASE,
 )
 
 # Protocol-shaped line openers or closers are a dropped tool attempt, not a final
 # answer. This also catches payloads whose opener was lost by the provider.
 _DSML_LEAK_PATTERN = re.compile(
-    rf'(?:^|\n)[ \t]*<{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}\b'
-    rf'|</{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}>', re.IGNORECASE,
+    rf'(?:^|\n)[ \t]*<{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}(?=[\s>]|\Z)'
+    rf'|</{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}>\s*\Z', re.IGNORECASE,
 )
 
 # Named <function name=...> blocks; boundary- and name-gated (see _THINK_STRIP_PATTERNS note).

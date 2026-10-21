@@ -73,6 +73,73 @@ def test_real_turn_retries_unexecuted_dsml(agent, leak):
     tool.assert_not_called()
 
 
+@pytest.mark.parametrize('candidate', ['reasoning', 'stream', 'housekeeping', 'length'])
+def test_alternate_final_sources_do_not_accept_dsml(agent, candidate):
+    leak = 'print(123)\n</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>'
+    first = _response('' if candidate != 'length' else leak)
+    if candidate == 'reasoning':
+        first.choices[0].message.reasoning_content = leak
+    elif candidate == 'length':
+        first.choices[0].finish_reason = 'length'
+    calls = []
+    def create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            if candidate == 'stream':
+                agent._current_streamed_assistant_text = leak
+            elif candidate == 'housekeeping':
+                agent._last_content_with_tools = leak
+                agent._last_content_tools_all_housekeeping = True
+            return first
+        return _response('Recovered final answer.')
+    agent.client.chat.completions.create.side_effect = create
+    with (patch.object(agent, '_persist_session'), patch.object(agent, '_save_trajectory'),
+          patch.object(agent, '_cleanup_task_resources'),
+          patch('agent.turn_final_response.answer_in_reasoning_capability', return_value=True),
+          patch('agent.turn_empty_response.interruptible_backoff_sleep', return_value=None)):
+        result = agent.run_conversation('Run the requested task.')
+    assert len(calls) == 2
+    assert result['final_response'] == 'Recovered final answer.'
+    assert all('print(123)' not in str(m.get('content')) for m in result['messages'])
+
+
+@pytest.mark.parametrize('text', [
+    '结束标签 `</｜DSML｜invoke>` 表示调用结束，不要执行。',
+    '<｜DSML｜calls-example 是普通标识。',
+])
+def test_protocol_mentions_are_not_unexecuted_calls(agent, text):
+    agent.client.chat.completions.create.return_value = _response(text)
+    with (patch.object(agent, '_persist_session'), patch.object(agent, '_save_trajectory'),
+          patch.object(agent, '_cleanup_task_resources'),
+          patch('agent.turn_empty_response.interruptible_backoff_sleep', return_value=None)):
+        result = agent.run_conversation('Explain the syntax.')
+    assert agent.client.chat.completions.create.call_count == 1
+    assert result['final_response'] == text
+    assert strip_think_blocks(None, text) == text
+    assert _strip_reasoning_tags(text) == text
+
+
+def test_valid_reply_is_not_discarded_for_private_reasoning(agent):
+    reply = _response('Valid final answer.')
+    reply.choices[0].message.reasoning_content = 'private\n</｜DSML｜invoke>'
+    agent.client.chat.completions.create.return_value = reply
+    with (patch.object(agent, '_persist_session'), patch.object(agent, '_save_trajectory'),
+          patch.object(agent, '_cleanup_task_resources')):
+        result = agent.run_conversation('Reply normally.')
+    assert agent.client.chat.completions.create.call_count == 1
+    assert result['final_response'] == 'Valid final answer.'
+
+
+def test_many_unclosed_openers_are_bounded():
+    # The original same-kind opener lookahead missed attributes, rescanning every
+    # suffix. A generous wall bound catches that regression without microbench noise.
+    from time import monotonic
+    text = '<｜DSML｜invoke name="terminal">' * 4000
+    start = monotonic()
+    assert not strip_think_blocks(None, text).strip()
+    assert monotonic() - start < 2
+
+
 def test_repeated_dsml_is_bounded_and_not_executed(agent):
     leak = 'unexecuted\n</｜｜DSML｜｜ invoke></｜｜DSML｜｜ calls>'
     agent.client.chat.completions.create.side_effect = [_response(leak) for _ in range(8)]
