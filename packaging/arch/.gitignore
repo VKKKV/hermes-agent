@@ -1,0 +1,6 @@
+# Local makepkg outputs and downloaded sources
+/src/
+/pkg/
+/*.pkg.tar.*
+/*.pkg.tar.*.sig
+/*.tar.gz
