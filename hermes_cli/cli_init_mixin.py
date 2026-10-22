@@ -21,7 +21,7 @@ from utils import base_url_host_matches, base_url_hostname, is_truthy_value
 # Log-record parity with the origin module.
 logger = logging.getLogger("cli")
 
-# The launch flags that pick the model route: ``/new`` starts on the profile's default route.
+# Launch route fields excluded when a snapshot restore needs a replacement session.
 _ROUTE_FLAGS = ("model", "provider", "api_key", "base_url")
 
 
@@ -473,10 +473,9 @@ class CLIInitMixin:
 
     def _new_session_id(self, now, *, branch_of=None, title=None):
         """The id main mints for /new (``new_session_id``) and /branch (``mint_session_id``). On a gateway
-        store it is a session the gateway created: /new is a fresh ``session.create`` on the profile's
-        default model (an explicit -m was for the previous session only) with the run's other launch
-        flags, /branch the child of
-        ``session.mutate branch``. Before this CLI opened its gateway session (or off the gateway) it is
+        store it is a session the gateway created: /new is a fresh ``session.create`` on the active
+        model/provider route with the run's other launch flags, /branch the child of ``session.mutate
+        branch``. Before this CLI opened its gateway session (or off the gateway) it is
         main's local mint, which ``_ensure_gateway_session`` replaces on first use, as at startup."""
         from hermes_cli.gateway_session_store import GatewaySessionStore
         store = getattr(self, "_session_db", None)
@@ -494,9 +493,13 @@ class CLIInitMixin:
                 store.set_session_yolo(child, True)
                 enable_session_yolo(child)
             return child
-        # The run's other launch flags hold for every session it opens, as main's one AIAgent did across /new.
-        launch = {key: value for key, value in _gateway_launch(self).items() if key not in _ROUTE_FLAGS}
+        # Keep the run's other launch flags, but use the CURRENT route, not startup flags or defaults.
+        launch = _gateway_launch(self)
+        launch.update(model=getattr(self, "model", None),
+                      provider=getattr(self, "provider", None) or getattr(self, "requested_provider", None))
         sid = store.create(launch, record_cwd=False)
+        # A restarted owner must get this session's key, not a stale startup provider's key.
+        store.connection.launch_api_key = launch["api_key"] or None
         self.session_id = sid
         return sid
 

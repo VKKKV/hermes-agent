@@ -55,39 +55,49 @@ def _answering(cli, *answers):
     return shown
 
 
-def test_new_after_a_model_switch_leaves_the_ended_session_alone(gateway):
+@pytest.mark.parametrize("pending_once", [False, True])
+def test_new_after_a_model_switch_leaves_the_ended_session_alone(gateway, pending_once):
     """Review item 1: /new reset the model to the config default through the stand-in before it was
     rebound, so ``session.mutate model`` rewrote the session just ended (a later /resume of it came back
-    on the default). The new session is created on the profile's default and runs it."""
+    on the default). The fresh session inherits the active route without rewriting the old one."""
     from cli import CLI_CONFIG, HermesCLI
     from hermes_cli.cli_init_mixin import CLIInitMixin
     from hermes_cli.gateway_session_store import GatewaySessionStore
     conn, client = gateway
     rpc = client.rpc
 
-    async def create_on_the_default(method, **params):
+    async def create_on_the_selected_route(method, **params):
         if method != "session.create":
             return await rpc(method, **params)
         client.calls.append((method, params))
         return {"stored_session_id": "local-new", "revision": 1, "execution_generation": 1,
-                "info": {"model": "config-default-model", "provider": "openrouter"}}
-    client.rpc = create_on_the_default
+                "info": {"model": params.get("model", "config-default-model"),
+                         "provider": params.get("provider", "openrouter")}}
+    client.rpc = create_on_the_selected_route
     agent = GatewayAgent(connection=conn, session_id=SID, model="config-default-model", provider="openrouter")
-    agent.switch_model(new_model="gpt-x", new_provider="openrouter")  # /model gpt-x
+    agent.switch_model(new_model="gpt-x", new_provider="custom:active")  # /model gpt-x
     client.calls.clear()
-    cli = _cli(agent=agent, model="gpt-x", _session_db=GatewaySessionStore(connection=conn), conversation_history=[],
+    cli = _cli(agent=agent, model="gpt-x", provider="custom:active", requested_provider="custom:active",
+               _explicit_api_key="active-key", _explicit_base_url="https://active.example/v1",
+               _session_db=GatewaySessionStore(connection=conn), conversation_history=[],
                _pending_title=None, _resumed=False, _notify_session_boundary=MagicMock(),
                _discard_session_if_empty=MagicMock(), service_tier=None, enabled_toolsets=None, _explicit_toolsets=False)
     cli._new_session_id = lambda now: CLIInitMixin._new_session_id(cli, now)
-    default = ModelSwitchResult(success=True, new_model="config-default-model", target_provider="openrouter",
-                                api_key="k", base_url="", api_mode="chat_completions")
+    if pending_once:
+        cli._pending_one_turn_model_restore = HermesCLI._snapshot_model_runtime(cli)
+        agent.switch_model(new_model="one-turn-only", new_provider="openrouter", once=True)
+        cli.model, cli.provider = "one-turn-only", "openrouter"
     with patch.dict(CLI_CONFIG, {"model": {"default": "config-default-model", "provider": "openrouter"}}), \
-            patch("hermes_cli.model_switch.switch_model", return_value=default):
+            patch("hermes_cli.model_switch.switch_model") as switch:
         HermesCLI.new_session(cli, silent=True)
     assert _mutations(client) == []
-    assert "model" not in dict(client.calls)["session.create"]  # the profile's default
+    created = dict(client.calls)["session.create"]
+    assert (created["model"], created["provider"]) == ("gpt-x", "custom:active")
+    assert (created["api_key"], created["base_url"]) == ("active-key", "https://active.example/v1")
+    switch.assert_not_called()
     assert cli.session_id == agent.session_id == "local-new"
-    assert (cli.model, agent.model) == ("config-default-model", "config-default-model")
+    assert (cli.model, agent.model) == ("gpt-x", "gpt-x")
+    assert (cli.provider, agent.provider) == ("custom:active", "custom:active")
 
 
 def test_model_before_the_first_turn_commits_on_the_session_that_turn_runs(gateway, monkeypatch):

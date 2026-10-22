@@ -340,20 +340,20 @@ def test_rewind_refuses_when_the_warm_view_diverged(store):
 
 
 def test_new_session_id_is_a_fresh_gateway_session(store, monkeypatch):
-    """/new: the id main mints is the gateway's new session (created with the profile's default model:
-    an explicit -m was for the previous session only)."""
+    """/new mints a gateway session on the active route, even without an explicit launch -m."""
     from hermes_cli.cli_init_mixin import CLIInitMixin
     monkeypatch.delenv("HERMES_SESSION_SOURCE", raising=False)
     db, client = store
     host = types.SimpleNamespace(session_id="local-old", _resumed=True, _session_db=db, model="m-explicit",
-                                 _explicit_model_override=True, requested_provider=None, enabled_toolsets=["file"],
+                                 _explicit_model_override=False, provider="custom:active",
+                                 requested_provider="custom:active", enabled_toolsets=["file"],
                                  _explicit_toolsets=True, _gateway_session_open=True)
     host._ensure_gateway_session = lambda: CLIInitMixin._ensure_gateway_session(host)
     db.open_session(cli("local-old", resumed=True))
     sid = CLIInitMixin._new_session_id(host, None)
     assert sid == "local-new" and host.session_id == "local-new"
     _method, params = [c for c in client.calls if c[0] == "session.create"][-1]
-    assert "model" not in params and params["toolsets"] == ["file"]
+    assert (params["model"], params["provider"], params["toolsets"]) == ("m-explicit", "custom:active", ["file"])
     # The profile default is not a pick: the gateway resolves it, so a stale name can't refuse /new (#138670).
     host._explicit_toolsets = False
     CLIInitMixin._new_session_id(host, None)
@@ -656,20 +656,21 @@ def test_unchanged_model_flag_on_resume_ignores_the_configured_provider(store, m
 
 def test_new_session_keeps_the_runs_launch_policy(store, monkeypatch):
     """CLI-3: `/new` keeps `--max-turns`, `--checkpoints`, `--run-budget`, `-v` and `-s` (main kept one
-    AIAgent across /new); only the explicit model route is left to the profile default."""
+    AIAgent across /new), along with the active model route."""
     from hermes_cli.cli_init_mixin import CLIInitMixin
     monkeypatch.setattr("agent.skill_commands.resolve_auto_load_skills", lambda config=None: [])
     db, client = store
     db.open_session(cli("local-old", resumed=True))
     host = types.SimpleNamespace(session_id="local-old", _session_db=db, _gateway_session_open=True,
-                                 model="m-explicit", _explicit_model_override=True, requested_provider="openrouter",
+                                 model="m-explicit", provider="openrouter", _explicit_model_override=True,
+                                 requested_provider="openrouter",
                                  enabled_toolsets=["file"], _explicit_toolsets=True, _explicit_max_turns=3, _explicit_checkpoints=True,
                                  _explicit_run_budget=60, verbose=True, _preload_skills_requested=["arxiv"])
     CLIInitMixin._new_session_id(host, None)
     params = [p for m, p in client.calls if m == "session.create"][-1]
     assert (params["max_turns"], params["checkpoints"], params["run_budget"], params["verbose"],
             params["skills"], params["toolsets"]) == (3, True, 60.0, True, ["arxiv"], ["file"]), params
-    assert "model" not in params and "provider" not in params
+    assert (params["model"], params["provider"]) == ("m-explicit", "openrouter")
 
 
 def test_branch_carries_a_live_yolo_onto_the_gateway_child(store):

@@ -59,58 +59,6 @@ def _dim_notice(cli, msg: str, quiet: bool) -> None:
         cli._console_print(f"[dim]{_escape(msg)}[/dim]")
 
 
-def _reset_model_to_config_default(cli, silent: bool) -> None:
-    """/new is a full boundary: re-derive model/provider from config.yaml so a
-    session-only ``/model --session`` switch never leaks into the next session.
-    Best-effort — an unreachable default must never block /new. Module-level helper (like
-    ``_apply_new_session_title``): tests drive ``new_session`` unbound on a SimpleNamespace."""
-    from cli import CLI_CONFIG, _cprint, _split_model_config_default, logger
-    _model_config = CLI_CONFIG.get("model", {})
-    if isinstance(_model_config, dict):
-        _raw_default = _model_config.get("default") or _model_config.get("model") or ""
-        _config_provider = _model_config.get("provider", "")
-    else:
-        _raw_default, _config_provider = (_model_config or ""), ""
-    _config_model, _ = _split_model_config_default(_raw_default)
-    if not _config_model or _config_model == getattr(cli, "model", None):
-        return
-    try:
-        from hermes_cli.model_switch import switch_model as _switch_model
-
-        r = _switch_model(
-            raw_input=_config_model,
-            current_provider=cli.provider or "",
-            current_model=cli.model or "",
-            current_base_url=cli.base_url or "",
-            current_api_key=cli.api_key or "",
-            is_global=False,
-            explicit_provider=_config_provider or "")
-        if not r.success:
-            return
-        # A gateway /new already opened the next session on the profile's default (``session.create``
-        # without a model); the stand-in still points at the ended session, which a switch would rewrite.
-        if cli.agent and not getattr(cli, "_gateway_session_open", False):
-            cli.agent.switch_model(
-                new_model=r.new_model, new_provider=r.target_provider, api_key=r.api_key,
-                base_url=r.base_url, api_mode=r.api_mode,
-                capabilities=getattr(r, "runtime_capabilities", None))
-        cli.model = r.new_model
-        cli.provider = r.target_provider
-        cli.requested_provider = r.target_provider
-        cli._explicit_api_key = r.api_key
-        cli._explicit_base_url = r.base_url
-        if r.api_key:
-            cli.api_key = r.api_key
-        if r.base_url:
-            cli.base_url = r.base_url
-        if r.api_mode:
-            cli.api_mode = r.api_mode
-        if not silent:
-            _cprint(f"  {t('cli.session.model_reset_default', model=r.new_model)}")
-    except Exception:
-        logger.debug("/new model reset to config default failed", exc_info=True)
-
-
 def _apply_new_session_title(cli, title: str) -> Optional[str]:
     """Sanitize + persist a /new title; returns the stored title or None (untitled)."""
     from cli import _cprint
@@ -564,7 +512,10 @@ class CLISessionMixin:
         from cli import (
             CLI_CONFIG, _parse_service_tier_config,
             _sync_process_session_id, datetime)
-        from hermes_cli.cli_model_switch_mixin import _resolve_cli_reasoning
+        from hermes_cli.cli_model_switch_mixin import CLIModelSwitchMixin, _resolve_cli_reasoning
+        # A pending --once belongs to the old conversation, not the next session's route.
+        CLIModelSwitchMixin._restore_model_runtime_snapshot(
+            self, getattr(self, "_pending_one_turn_model_restore", None))
         old_session_id = self.session_id
         _boundary_snapshot = None
         if self.agent:
@@ -602,16 +553,13 @@ class CLISessionMixin:
         self.conversation_history = []
         self._pending_title = None
         self._resumed = False
-        # An explicit -m/--model was for the previous session only.
+        # A startup -m must not override a later /resume; the selected route itself stays active.
         self._explicit_model_override = False
-        # Session-scoped overrides (/model --session, /fast, one-turn restores) don't carry over.
-        # Re-derive model/provider and service tier from config.yaml so a session-only switch never leaks
-        # into the next session (#48055, #23131).
+        # Keep the active model/provider/endpoint. /new clears conversation state, not the selected route.
+        # Fast and reasoning overrides still reset for the next conversation.
         self._pending_one_turn_model_restore = None
         self.service_tier = _parse_service_tier_config(CLI_CONFIG["agent"].get("service_tier", ""))
-        _reset_model_to_config_default(self, silent)
-        # After the model reset: the effort belongs to the model the fresh session lands on (a /reasoning
-        # session override is dropped, the default model's per-model override is kept).
+        # Drop /reasoning's session override, retaining the active model's per-model default.
         _resolve_cli_reasoning(self)
         _sync_process_session_id(self.session_id)
 

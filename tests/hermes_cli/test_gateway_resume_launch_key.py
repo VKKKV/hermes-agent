@@ -306,27 +306,38 @@ async def test_slash_resume_in_a_typed_key_cli_switches_to_a_keyless_session_on_
 
 
 @pytest.mark.asyncio
-async def test_branch_after_new_in_a_typed_key_cli_switches_to_the_child(tmp_path, monkeypatch):
-    """Review probe (#141481, CLI-34): ``/new`` in a ``--api-key`` CLI opens a session on the profile's default
-    route, without the key, and ``/branch`` of it attaches the child the owner just made with the plain
-    fallback. Held to the typed key, the attach raised the ``--api-key`` mismatch after the owner had
-    committed the child: the CLI stayed on the parent, and each retry made another child."""
+@pytest.mark.parametrize('selected_key', [RAW, 'SWITCHED-PROVIDER-KEY'])
+async def test_branch_after_new_in_a_typed_key_cli_switches_to_the_child(tmp_path, monkeypatch, selected_key):
+    """/new preserves the selected route/key across /branch and an owner restart."""
     from datetime import datetime
     from gateway import run
     from hermes_cli.cli_init_mixin import CLIInitMixin
     owners = await _Owners().start(tmp_path, monkeypatch)
-    monkeypatch.setattr(run, '_load_gateway_config', lambda *a, **k: {'platform_toolsets': {'cli': []}, 'model': 'm'})
+    monkeypatch.setattr(run, '_load_gateway_config', lambda *a, **k: {'platform_toolsets': {'cli': []}, 'model': 'config-default-model'})
     conn = GatewayConnection(connect=owners.dial)
     try:
         store = GatewaySessionStore(conn)
         cli = _typed(owners.keyed, RAW)
+        cli.model, cli.provider = 'm', 'openrouter'
+        cli._explicit_api_key, cli._explicit_base_url = selected_key, LAUNCH['base_url']
         cli._session_db, cli._gateway_session_open = store, True
         await asyncio.to_thread(store.open_session, cli, LAUNCH)
         fresh = await asyncio.to_thread(CLIInitMixin._new_session_id, cli, datetime.now())  # /new
-        assert owners.key_of(fresh) is None
+        assert owners.key_of(fresh) == selected_key
+        from gateway.session_policy import policy_for_source
+        policy = policy_for_source(owners.current.runner, owners.current.sessions[fresh].source)
+        assert policy is not None
+        assert (policy.model, policy.provider, policy.base_url) == ('m', 'openrouter', LAUNCH['base_url'])
+        assert owners.store._db.get_session(fresh)['model'] == 'm'
+        assert owners.store._db.get_session(owners.keyed)['model'] == 'm'
+        assert owners.store._db.get_messages(fresh) == []
         owners.store._db.append_message(fresh, role='user', content='hello')
         child = await asyncio.to_thread(CLIInitMixin._new_session_id, cli, datetime.now(), branch_of=fresh)  # /branch
         assert child != fresh and store.current['stored_session_id'] == child
+        await owners.hang_up(conn)
+        await owners.boot('restarted')
+        await asyncio.to_thread(conn.start, 10)
+        assert owners.key_of(fresh) == owners.key_of(child) == selected_key
     finally:
         await owners.close(conn)
 

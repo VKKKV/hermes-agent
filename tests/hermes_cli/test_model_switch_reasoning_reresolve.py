@@ -68,11 +68,11 @@ def test_failed_swap_and_new_session_keep_the_effort_with_the_route():
         assert not CLIModelSwitchMixin._stage_and_swap_model(cli, _result("glm-5.3-flash"), "deepseek-v4-flash")
         assert (cli.model, cli.reasoning_config) == ("deepseek-v4-flash", _MEDIUM)
 
-        # /new on a session whose config default carries an override: the default model's effort,
-        # not the bare global key, and a /reasoning session override does not carry over.
-        with patch.dict(cli_mod.CLI_CONFIG["model"], {"default": "glm-5.3-flash"}):
-            cli = _cli("glm-5.3-flash", {"enabled": False})
-            cli.conversation_history, cli.session_id, cli._session_db, cli._pending_title = [], "old", None, None
-            cli._resumed, cli._notify_session_boundary = False, lambda *_a, **_k: None
-            CLISessionMixin.new_session(cli, silent=True)
+        # /new keeps the active model's effort, even when config selects another model.
+        # A /reasoning session override still does not carry over.
+        cli = _cli("glm-5.3-flash", {"enabled": False})
+        cli.conversation_history, cli.session_id, cli._session_db, cli._pending_title = [], "old", None, None
+        cli._resumed, cli._notify_session_boundary = False, lambda *_a, **_k: None
+        CLISessionMixin.new_session(cli, silent=True)
+        assert cli.model == "glm-5.3-flash"
         assert cli.reasoning_config == _HIGH

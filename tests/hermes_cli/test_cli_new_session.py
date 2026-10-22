@@ -153,8 +153,11 @@ def test_new_command_creates_real_fresh_session_and_resets_agent_state(tmp_path)
     cli = _prepare_cli_with_active_session(tmp_path)
     old_session_id = cli.session_id
     old_session_start = cli.session_start
+    cli.model = cli.agent.model = "session-picked-model"
+    cli.provider = cli.requested_provider = "custom:session"
 
-    cli.process_command("/new")
+    with patch.dict("cli.CLI_CONFIG", {"model": {"default": "config-default-model", "provider": "openrouter"}}):
+        cli.process_command("/new")
 
     assert cli.session_id != old_session_id
 
@@ -164,6 +167,9 @@ def test_new_command_creates_real_fresh_session_and_resets_agent_state(tmp_path)
 
     new_session = cli._session_db.get_session(cli.session_id)
     assert new_session is not None
+    assert new_session["model"] == cli.model == cli.agent.model == "session-picked-model"
+    assert (cli.provider, cli.requested_provider) == ("custom:session", "custom:session")
+    assert cli.conversation_history == []
 
     cli._session_db.append_message(cli.session_id, role="user", content="next turn")
 
