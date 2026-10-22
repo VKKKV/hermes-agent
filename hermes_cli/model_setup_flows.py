@@ -18,7 +18,7 @@ from hermes_cli.model_setup_flows_common import (
     _ensure_dict_section, _ensure_flow_api_key, _finish_model,
     _load_config_model_section, _models_dev_merged, _oauth_gate, _persist_model, _pick_model_or_prompt,
     _print_numbered, _prompt_auth_credentials_choice,
-    _note_setup_failure, _run_login, _say, _show_curated)
+    _run_login, _say, _show_curated)
 from hermes_cli.model_setup_flows_custom import _model_flow_custom, _model_flow_named_custom
 from hermes_cli.model_setup_flows_azure import _model_flow_azure_foundry
 from hermes_cli.model_setup_flows_bedrock import _model_flow_bedrock
@@ -181,8 +181,7 @@ def _nous_model_catalog(free_tier: bool, portal_url: str, model_ids: list, prici
         partition_nous_models_by_tier,
         union_with_nous_on_sale_models,
         union_with_portal_free_recommendations,
-        union_with_portal_paid_recommendations,
-    )
+        union_with_portal_paid_recommendations)
 
     # Free users: union with the Portal's freeRecommendedModels (newly launched free models appear
     # before the curated list catches up), then partition selectable/unavailable by Portal pricing.
@@ -210,7 +209,6 @@ def _nous_model_catalog(free_tier: bool, portal_url: str, model_ids: list, prici
 
     if not model_ids and not unavailable_models:
         print("No models available for Nous Portal after filtering.")
-        _note_setup_failure("no_models")
         return None
     if free_tier and not model_ids:
         print("No free models currently available.")
@@ -239,10 +237,8 @@ def _nous_verified_credentials(creds_or_none=None):
                 _login_nous(_nous_login_args(None), PROVIDER_REGISTRY["nous"])
             except Exception as login_exc:
                 print(f"Re-login failed: {login_exc}")
-            _note_setup_failure("auth")
             return None
         print(f"Could not verify credentials: {msg}")
-        _note_setup_failure("auth")
         return None
 
 
@@ -359,8 +355,7 @@ def _model_flow_nous(config, current_model="", args=None):
 def _model_flow_openai_codex(config, current_model=""):
     """OpenAI Codex provider: ensure logged in, then pick model."""
     from hermes_cli.auth import (
-        get_codex_auth_status, _prompt_model_selection, _login_openai_codex, PROVIDER_REGISTRY, DEFAULT_CODEX_BASE_URL,
-    )
+        get_codex_auth_status, _prompt_model_selection, _login_openai_codex, PROVIDER_REGISTRY, DEFAULT_CODEX_BASE_URL)
     from hermes_cli.codex_models import get_codex_model_ids
     if not _oauth_gate(
         bool(get_codex_auth_status().get("logged_in")), "OpenAI Codex", _login_openai_codex, argparse.Namespace(),
@@ -461,7 +456,6 @@ def _model_flow_minimax_oauth(config, current_model="", args=None):
         creds = resolve_minimax_oauth_runtime_credentials()
     except AuthError as exc:
         print(format_auth_error(exc))
-        _note_setup_failure("auth")
         return
 
     from hermes_cli.models import _PROVIDER_MODELS
@@ -520,7 +514,6 @@ def _copilot_obtain_token() -> bool:
             _say("  Copilot token saved.", "")
         except Exception as exc:
             print(f"  Login failed: {exc}")
-            _note_setup_failure("auth")
             return False
         return True
     if choice == "2":
@@ -1092,7 +1085,6 @@ def _external_process_login_gate(profile, status) -> bool:
         return False
     if not profile.setup_status()["logged_in"]:
         print("Login failed.")
-        _note_setup_failure("auth")
         return False
     _say("", f"  {profile.display_name} credentials: ✓", "")
     return True

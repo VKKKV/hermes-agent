@@ -20,7 +20,6 @@ import { useEffect, useState } from 'react'
 
 import { useI18n } from '@/i18n'
 import { resolveTipAnchor } from '@/lib/tips/anchor'
-import { recordFriction } from '@/store/desktop-metrics'
 import { $activeTip, dismissTip, retireActiveTip } from '@/store/tips'
 
 import { TipBubble } from './tip-bubble'
@@ -103,7 +102,6 @@ export function TipHost() {
       anchor={anchor}
       keybind={tip.keybind}
       onClose={() => {
-        recordFriction('notice_dismissed', 'tip')
         retireActiveTip()
       }}
       side={tip.side}

@@ -772,7 +772,6 @@ def _cmd_retry(rid, params, session, name, arg):
         if err:
             return err
         content = cc.retryable_user_text(rewound[1].get("content"))
-    _tui_model_friction("retry", session)
     return _ok(rid, {"type": "send", "message": content})
 
 
@@ -872,7 +871,6 @@ def _cmd_undo(rid, params, session, name, arg):
             # The session's profile scope: a multiplexed manager refuses a hook naming no profile (#140058).
             with contextlib.suppress(Exception), _session_profile_runtime_scope(session):
                 step()
-    _tui_model_friction("undo", session, turns_undone)
     turn_word = "turn" if turns_undone == 1 else "turns"
     notice = f"↶ Undid {turns_undone} {turn_word} ({rewound_count} message(s)). Edit and resubmit, or send a new message."
     return _ok(rid, {"type": "prefill", "message": target_text, "notice": notice})
@@ -1522,7 +1520,6 @@ def _(rid, params: dict) -> dict:
     if bearer_token := params.get("bearer_token"):
         server_config["headers"] = mc._save_bearer_auth_token(name, str(bearer_token))
     saved_ok = mc._save_mcp_server(name, server_config)
-    _tools_mod("tui_gateway.mcp_rpc_helpers").record_mcp_add(entry, server_config, saved_ok)
     if not saved_ok:
         return _err(rid, 4001, f"server '{name}' rejected: suspicious command/args configuration")
     saved = mc._get_mcp_servers().get(name, server_config)

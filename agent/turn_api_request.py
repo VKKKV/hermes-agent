@@ -13,7 +13,6 @@ import logging
 from typing import Any
 
 from agent.message_sanitization import sanitize_outbound_kwargs, strip_images_for_rejecting_model
-from hermes_cli.observability.shared_metrics_efficiency import observe_request_tools
 from utils import env_var_enabled
 
 logger = logging.getLogger("agent.conversation_loop")
@@ -57,7 +56,7 @@ def _fire_pre_api_request_hook(
             if not isinstance(request_messages, list):
                 request_messages = api_messages
             # Shallow copies: plugins may retain the lists; deepcopy is costly.
-            # ``request_messages``/``conversation_history`` are raw langfuse passthroughs.
+            # ``request_messages``/``conversation_history`` are explicit plugin payloads.
             # Anthropic (``system``) and Responses/Codex (``instructions``) move the system
             # prompt out of messages; pass it for observability.
             _invoke_hook(
@@ -117,7 +116,6 @@ def build_api_request(
     )
     # A model that rejected image content gets text only; history keeps the images.
     strip_images_for_rejecting_model(agent, api_messages)
-    observe_request_tools(agent, tools_for_api)
     if tools_for_api == agent.tools:
         api_kwargs = agent._build_api_kwargs(api_messages)
     else:

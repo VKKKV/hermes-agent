@@ -13,13 +13,11 @@ import { frNotices } from './fr_notices'
 import { frOnboarding } from './fr_onboarding'
 import { frPluginUpdate } from './fr_plugin_update'
 import { frProjects } from './fr_projects'
-import { frSharedMetrics } from './fr_shared_metrics'
 import { frThemePicker } from './fr_theme_picker'
 import { frUpdateChannel } from './fr_update_channel'
 import { introFr } from './intro-fr'
 
 export const frOverrides = {
-  sharedMetrics: frSharedMetrics,
   firstRun: frFirstRun,
   intro: introFr,
   connectors: frConnectorCard,

@@ -6,9 +6,6 @@ import pytest
 pytest.importorskip("nemo_relay")
 
 from agent import auxiliary_client, relay_llm, relay_runtime
-from hermes_cli.observability.shared_metrics import SharedMetricsStore
-from hermes_cli.observability.shared_metrics_contract import MODEL_ROUTE_METRIC
-from hermes_cli.observability.shared_metrics_subscriber import SharedMetricsSubscriber
 
 
 @pytest.fixture()
@@ -185,89 +182,6 @@ def test_auxiliary_provider_fallback_closes_one_real_logical_call(
     ]
 
 
-def test_auxiliary_provider_fallback_records_one_terminal_model_route(
-    relay_turn,
-    tmp_path,
-):
-    relay, turn = relay_turn
-    store = SharedMetricsStore(
-        tmp_path / "metrics.sqlite3",
-        tmp_path / "outbox",
-    )
-    subscriber = SharedMetricsSubscriber(
-        store,
-        "test-version",
-        runtime_id=turn.lease.host.runtime_id,
-    )
-    subscriber_name = "test.auxiliary-model-route"
-    relay.subscribers.register(subscriber_name, subscriber)
-    turn.lease.host.retain_managed_execution(subscriber_name)
-    responses = iter([
-        SimpleNamespace(model="failed/model", choices=[]),
-        SimpleNamespace(
-            model="Accepted/Model",
-            choices=[SimpleNamespace(message=SimpleNamespace(content="recovered"))],
-        ),
-    ])
-    client = SimpleNamespace(
-        chat=SimpleNamespace(
-            completions=SimpleNamespace(
-                create=lambda **_kwargs: next(responses),
-            )
-        )
-    )
-
-    @auxiliary_client._relay_auxiliary_call
-    def run(task):
-        auxiliary_client._set_relay_auxiliary_route(
-            "nvidia",
-            "failed/configured-model",
-            "chat_completions",
-        )
-        with pytest.raises(RuntimeError, match="invalid response"):
-            auxiliary_client._validate_llm_response(
-                auxiliary_client._relay_sync_completion(
-                    client,
-                    {"model": "failed/configured-model", "messages": []},
-                ),
-                task,
-            )
-        auxiliary_client._set_relay_auxiliary_route(
-            "OpenRouter",
-            "fallback/configured-model",
-            "chat_completions",
-        )
-        return auxiliary_client._validate_llm_response(
-            auxiliary_client._relay_sync_completion(
-                client,
-                {"model": "fallback/configured-model", "messages": []},
-            ),
-            task,
-        )
-
-    try:
-        result = run("compression")
-        relay.subscribers.flush()
-    finally:
-        turn.lease.host.release_managed_execution(subscriber_name)
-        relay.subscribers.deregister(subscriber_name)
-
-    assert result.choices[0].message.content == "recovered"
-    snapshot = store.counter_snapshot()
-    assert len(snapshot) == 1
-    assert snapshot[0]["metric_name"] == MODEL_ROUTE_METRIC
-    assert snapshot[0]["resource"]["hermes_version"] == "test-version"
-    assert snapshot[0]["dimensions"] == {
-        "call_role": "auxiliary",
-        # The success keeps the error it recovered from; an invalid shape classifies as unknown.
-        "error_class": "unknown",
-        "model": "accepted/model",
-        "outcome": "success",
-        "provider": "openrouter",
-        "ttft_bucket": "unknown",
-    }
-    assert snapshot[0]["value"] == 1
-    assert snapshot[0]["packaged_value"] == 0
 
 
 class _ProviderStatusError(Exception):
@@ -276,23 +190,6 @@ class _ProviderStatusError(Exception):
         self.status_code = status_code
 
 
-def _aux_route_rows(relay_turn, tmp_path, run):
-    """Run ``run`` inside the turn with a real shared-metrics subscriber; the stored route rows."""
-    relay, turn = relay_turn
-    store = SharedMetricsStore(tmp_path / "metrics.sqlite3", tmp_path / "outbox")
-    subscriber = SharedMetricsSubscriber(store, "test-version", runtime_id=turn.lease.host.runtime_id)
-    relay.subscribers.register("test.auxiliary-route-rows", subscriber)
-    turn.lease.host.retain_managed_execution("test.auxiliary-route-rows")
-    try:
-        run()
-        relay.subscribers.flush()
-    finally:
-        turn.lease.host.release_managed_execution("test.auxiliary-route-rows")
-        relay.subscribers.deregister("test.auxiliary-route-rows")
-    return sorted(
-        (row["dimensions"]["outcome"], row["dimensions"]["error_class"], row["value"])
-        for row in store.counter_snapshot() if row["metric_name"] == MODEL_ROUTE_METRIC
-    )
 
 
 def _aux_attempts(*outcomes):
@@ -321,54 +218,10 @@ def _aux_call(task, client, attempts):
         auxiliary_client._relay_sync_completion(client, {"model": "m", "messages": []}), task)
 
 
-def test_auxiliary_model_routes_carry_classified_error_class(relay_turn, tmp_path):
-    """A failed aux call reports the classifier's reason for the error that ended it, and a
-    recovered one the error it recovered from, never a blanket ``unknown``/``none``."""
-    def run():
-        _aux_call("title_generation", _aux_attempts(_ProviderStatusError(429, "Rate limit exceeded"), "ok"), 2)
-        with pytest.raises(_ProviderStatusError):
-            _aux_call("title_generation", _aux_attempts(
-                _ProviderStatusError(404, "The model `m` does not exist")), 1)
-
-    assert _aux_route_rows(relay_turn, tmp_path, run) == [
-        ("failed", "model_not_found", 1),
-        ("success", "rate_limit", 1),
-    ]
 
 
-@pytest.mark.parametrize("abort", [
-    auxiliary_client.AuxiliaryExplicitCancellation(), InterruptedError("aux stream interrupted"), KeyboardInterrupt(),
-])
-def test_aborted_auxiliary_call_is_cancelled_not_failed(relay_turn, tmp_path, abort):
-    """A Hermes abort (/stop, interrupt, Ctrl+C) mid aux call is not a provider failure."""
-    def run():
-        with pytest.raises(type(abort)):
-            _aux_call("compression", _aux_attempts(abort), 1)
-
-    assert _aux_route_rows(relay_turn, tmp_path, run) == [("cancelled", "none", 1)]
 
 
-def test_auxiliary_call_finishing_under_the_turns_live_scope_is_counted(relay_turn, tmp_path):
-    """Title generation runs beside the turn, so the turn's own work is usually on top of its
-    logical scope when it finishes. Its result must still become the route row."""
-    relay, turn = relay_turn
-    host, session = turn.lease.host, turn.lease.session
-    turn_work = []
-
-    @auxiliary_client._relay_auxiliary_call
-    def title(task):
-        auxiliary_client._set_relay_auxiliary_route("openrouter", "m", "chat_completions")
-        response = auxiliary_client._relay_sync_completion(_aux_attempts("A title"), {"model": "m", "messages": []})
-        turn_work.append(host.run_in_session(
-            session, relay.scope.push, "test.turn_work", relay.ScopeType.Function, handle=turn.handle, input={}))
-        return auxiliary_client._validate_llm_response(response, task)
-
-    def run():
-        title("title_generation")
-        host.run_in_session(session, relay_runtime.pop_relay_scope, relay, turn_work[0], output={})
-        relay_runtime.SESSION_COORDINATOR.end_turn(turn, outcome="success")
-
-    assert _aux_route_rows(relay_turn, tmp_path, run) == [("success", "none", 1)]
 
 
 @pytest.mark.asyncio

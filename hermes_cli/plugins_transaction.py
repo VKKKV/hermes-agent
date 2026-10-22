@@ -37,7 +37,7 @@ def publish_plugin(staged: Path, target: Path, old_metadata: dict, new_metadata:
                 outcome = ("Reinstall declined: {}. The installed plugin and active environment are unchanged."
                            if target.exists() else "Install declined: {}. Nothing was installed.")
                 # The refusal carries its closed class (plugins_cmd_install._ConsentRefusal).
-                from hermes_cli.observability.shared_metrics_fields import tagged_failure_class
+                from hermes_cli.error_classification import tagged_failure_class
 
                 raise plugins_cmd.PluginOperationError(
                     outcome.format(reason), failure_class=tagged_failure_class(reason) or "other")

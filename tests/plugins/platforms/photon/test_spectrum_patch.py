@@ -19,6 +19,7 @@ _PATCHER = Path("plugins/platforms/photon/sidecar/patch-spectrum-mixed-attachmen
 def _sidecar_env(port: int) -> dict[str, str]:
     return {
         **os.environ,
+        "PHOTON_TELEMETRY": "true",
         "PHOTON_PROJECT_ID": "test-project",
         "PHOTON_PROJECT_SECRET": "test-secret",
         "PHOTON_SIDECAR_PORT": str(port),
@@ -68,7 +69,8 @@ def _write_sidecar_fixture(tmp_path: Path, *, sdk_available: bool) -> Path:
     (package / "index.js").write_text(
         textwrap.dedent(
             """
-            export async function Spectrum() {
+            export async function Spectrum(options) {
+              if (options.telemetry !== false) throw new Error("SDK telemetry was not disabled");
               return {
                 messages: { [Symbol.asyncIterator]() { return { next: () => new Promise(() => {}) }; } },
                 stop: async () => undefined,

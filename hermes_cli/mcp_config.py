@@ -14,8 +14,7 @@ from hermes_cli.config import (
     save_config,
     get_env_value,
     save_env_value,
-    get_hermes_home,
-)
+    get_hermes_home)
 from hermes_cli.colors import Colors, color
 from hermes_constants import display_hermes_home
 from hermes_cli.mcp_security import validate_mcp_server_entry
@@ -659,10 +658,7 @@ def cmd_mcp_add(args):
     def _record(saved: bool, failure_class: str = "config_rejected") -> None:
         # A save only fails on a suspicious configuration (_save_mcp_server returns False).
         if fresh:
-            from hermes_cli.mcp_catalog import record_mcp_install
-
-            record_mcp_install("url" if url else "local", None, "success" if saved else "failed",
-                               failure_class=None if saved else failure_class)
+            pass
 
     if url:
         server_config["url"] = url
@@ -798,7 +794,7 @@ def probe_failure_class(exc: BaseException) -> str:
     """Extension-install class for a failed MCP probe, from the exception TYPE (the same tests
     :func:`_probe_failure_next_step` uses), never its message. Never raises: an exception whose own
     attribute hooks raise reads ``connect_failed`` instead of replacing the user's error."""
-    from hermes_cli.observability.shared_metrics_fields import tagged_failure_class
+    from hermes_cli.error_classification import tagged_failure_class
 
     if tagged := tagged_failure_class(exc):
         return tagged

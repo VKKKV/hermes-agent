@@ -14,7 +14,6 @@ import { jaNotices } from './ja_notices'
 import { jaOnboarding } from './ja_onboarding'
 import { jaPluginSettings } from './ja_plugins'
 import { jaProjects } from './ja_projects'
-import { jaSharedMetrics } from './ja_shared_metrics'
 import { jaThemePicker } from './ja_theme_picker'
 import { jaUpdateChannel } from './ja_update_channel'
 
@@ -28,7 +27,6 @@ export const jaOverrides = {
     copyUrl: 'リンクをコピー',
     close: '閉じる'
   },
-  sharedMetrics: jaSharedMetrics,
   firstRun: jaFirstRun,
   intro: introJa,
   sessionImport: jaConnectors.sessionImport,

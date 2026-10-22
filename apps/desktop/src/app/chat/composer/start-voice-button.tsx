@@ -5,7 +5,6 @@ import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
 import { AudioLines, ChevronDown, iconSize } from '@/lib/icons'
 import { cn } from '@/lib/utils'
-import { recordAction } from '@/store/desktop-metrics'
 
 import { GHOST_ICON_BTN, PRIMARY_ICON_BTN } from './control-classes'
 import { useVoiceEngineName, VoiceEngineRows } from './voice-engine-rows'
@@ -41,7 +40,6 @@ export function StartVoiceButton({
           disabled={disabled}
           onClick={() => {
             triggerHaptic('open')
-            recordAction('composer.voice', 'click')
             onStart()
           }}
           size="icon"

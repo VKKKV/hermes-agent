@@ -35,8 +35,7 @@ from agent.conversation_compression_codex import _compress_context_via_codex_app
 from agent.conversation_compression_deadline import resolve_context_compression_timeouts
 from agent.conversation_compression_telemetry import (
     _emit_aborted_attempt_telemetry, _emit_blocked_attempt_telemetry, _emit_bypassed_attempt_telemetry,
-    _emit_compression_attempt_telemetry, _record_committed_attempt_effect, _snapshot_compression_effect_input,
-)
+    _emit_compression_attempt_telemetry, _record_committed_attempt_effect, _snapshot_compression_effect_input)
 from agent.memory_provider import PRE_COMPRESS_CHECKPOINT_API_VERSION
 from agent.model_metadata import estimate_messages_tokens_rough, estimate_request_tokens_rough
 from agent.session_activity import ActivityProvenance, normalize_activity_provenance
@@ -1604,7 +1603,6 @@ def _adopt_live_compression_child(
         return None
     agent.session_id = child_session_id
     _rebind_session_context(child_session_id)
-    _hand_off_metrics_segment(parent_session_id, child_session_id)
     agent._session_db_created = True
     # The turn skips restore/rebuild while this slot is set, so it may hold only the child's own
     # prompt, and only when that prompt matches the current runtime (otherwise None -> rebuild).
@@ -2000,8 +1998,7 @@ def check_compression_model_feasibility(agent: Any) -> None:
     try:
         from agent.auxiliary_client import (
             _resolve_task_provider_model, _try_configured_fallback_for_unavailable_client,
-            get_text_auxiliary_client,
-        )
+            get_text_auxiliary_client)
         from agent.model_metadata import MINIMUM_CONTEXT_LENGTH, get_model_context_length
         # Provider may be "auto"; fall back to the client's base_url hostname so the
         # user can tell where the compression model is actually called.
@@ -2389,8 +2386,7 @@ def _ensure_compressed_has_user_turn(original_messages: list, compressed: list) 
     # walk treats the whole compacted transcript as unpersisted and re-INSERTs it — the live set doubles on
     # every compaction (~58K → ~512K tokens in production).
     from agent.context_compressor import (
-        ContextCompressor, COMPRESSION_CONTINUATION_USER_CONTENT, _fresh_compaction_message_copy,
-    )
+        ContextCompressor, COMPRESSION_CONTINUATION_USER_CONTENT, _fresh_compaction_message_copy)
     if any(ContextCompressor._has_merged_inflight_replay(message) for message in compressed):
         # The in-flight request was restated onto the summary carrier (#100818); an anchor would duplicate it.
         return "already_present"
@@ -2463,13 +2459,6 @@ def _stamp_scoped_twins(targets: list, source: dict, *, exact_counts_stamped: bo
 _PENDING_CONTEXT_ENGINE_NOTIFICATION = "_pending_context_engine_compression_notification"
 
 
-def _hand_off_metrics_segment(old_session_id: str, new_session_id: str) -> None:
-    """Shared metrics count one conversation across the rotation (a no-op when collection is off)."""
-    with _swallow('shared-metrics segment hand-off failed', exc_info=True):
-        from hermes_cli.observability.relay_shared_metrics import rotate_segment
-        rotate_segment(old_session_id, new_session_id)
-
-
 def _notify_context_engine_compression_complete(agent: Any, *, new_session_id: str, old_session_id: str) -> bool:
     """Notify the active context engine after a durable compression commit."""
     # Opt-in relay session-span segmentation. Observer semantics — failure must
@@ -2479,7 +2468,6 @@ def _notify_context_engine_compression_complete(agent: Any, *, new_session_id: s
         relay_runtime.SESSION_COORDINATOR.notify_session_compacted(
             profile_key=relay_runtime.current_profile_key(), session_id=new_session_id, old_session_id=old_session_id
         )
-    _hand_off_metrics_segment(old_session_id, new_session_id)
     callback = getattr(agent.context_compressor, "on_session_start", None)
     if not callable(callback):
         return False
@@ -3929,9 +3917,6 @@ def _begin_compression_attempt(
     }
     with contextlib.suppress(Exception):
         agent._compression_attempt_id = attempt_id
-        from hermes_cli.observability.shared_metrics_events import begin_compression_attempt
-
-        begin_compression_attempt(trigger, approx_tokens or getattr(agent.context_compressor, "last_prompt_tokens", None))
     return _Attempt(snapshot, generation, started_at, seed)
 
 

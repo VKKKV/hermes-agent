@@ -16,8 +16,6 @@ from agent.context_compressor import ContextCompressor
 from agent.conversation_compression import compress_context
 from agent.conversation_compression_checkpoint import CompressionCheckpointUnavailable
 from agent.transports.codex_app_server_session import TurnResult
-from hermes_cli.observability import shared_metrics_events
-from hermes_cli.observability.shared_metrics_fields import compression_fields
 
 SECRET = "TOPSECRET_TRANSCRIPT_TEXT"
 
@@ -86,14 +84,9 @@ def _attempt_records(caplog):
     ]
 
 
-@pytest.fixture
-def shared_metric_rows(monkeypatch):
-    rows = []
-    monkeypatch.setattr(shared_metrics_events, "record_compression", lambda **kw: rows.append(compression_fields(**kw)))
-    return rows
 
 
-def test_committed_summary_records_trigger_effect_and_method_without_content(caplog, shared_metric_rows):
+def test_committed_summary_records_trigger_effect_and_method_without_content(caplog):
     agent = _Agent(_compressor())
 
     with patch.object(agent.context_compressor, "_generate_summary", return_value="SANITIZED SUMMARY"):
@@ -112,9 +105,6 @@ def test_committed_summary_records_trigger_effect_and_method_without_content(cap
     assert record["tool_results_pruned"] == 0 and record["reasoning_items_pruned"] == 0
     assert SECRET not in json.dumps(record) and "SANITIZED SUMMARY" not in json.dumps(record)
     # The precise label stays in the log; the shared metric keeps its coarse bucket.
-    assert shared_metric_rows == [
-        {"trigger": "auto", "outcome": "success", "context_fill_bucket": "75_to_90", "failure_class": "none"}
-    ]
 
 
 def test_deterministic_fallback_commit_records_its_method_and_dropped_items(caplog):
@@ -132,7 +122,7 @@ def test_deterministic_fallback_commit_records_its_method_and_dropped_items(capl
     assert SECRET not in json.dumps(record)
 
 
-def test_gate_blocked_attempt_logs_one_blocked_record_and_no_shared_metric(caplog, shared_metric_rows):
+def test_gate_blocked_attempt_logs_one_blocked_record_and_no_shared_metric(caplog):
     compressor = _compressor()
     agent = _Agent(compressor)
     messages = _messages()
@@ -149,10 +139,9 @@ def test_gate_blocked_attempt_logs_one_blocked_record_and_no_shared_metric(caplo
     assert (record["commit_status"], record["failure_class"]) == ("blocked", "blocked:cooldown")
     assert (record["trigger_source"], record["current_estimated_tokens"]) == ("post_tool", 80_000)
     assert record["attempt_id"] == agent._compression_attempt_id
-    assert shared_metric_rows == []
 
 
-def test_bypassed_attempt_does_not_leak_shared_metric_state_into_pool_saturation(caplog, shared_metric_rows):
+def test_bypassed_attempt_does_not_leak_shared_metric_state_into_pool_saturation(caplog):
     from agent.conversation_compression import run_compress_context_with_progress_timeout
 
     compressor = _compressor()
@@ -169,7 +158,6 @@ def test_bypassed_attempt_does_not_leak_shared_metric_state_into_pool_saturation
                 telemetry_agent=agent,
             )
 
-    assert shared_metric_rows == []
 
 
 class _CodexSession:
@@ -208,7 +196,7 @@ def _codex_agent(result, auto_mode):
         ("hermes", True, TurnResult(thread_id="t1", error="boom"), ("failed", "codex_compaction_failed", "none")),
     ],
 )
-def test_codex_route_logs_exactly_one_record_per_exit(caplog, shared_metric_rows, auto_mode, force, result, expected):
+def test_codex_route_logs_exactly_one_record_per_exit(caplog, auto_mode, force, result, expected):
     agent = _codex_agent(result, auto_mode)
 
     with caplog.at_level(logging.INFO, logger="agent.conversation_compression"):
@@ -219,10 +207,9 @@ def test_codex_route_logs_exactly_one_record_per_exit(caplog, shared_metric_rows
     assert record["route"] == "codex_app_server"
     assert record["trigger_source"] == ("manual" if force else "auto")
     assert SECRET not in json.dumps(record) and "boom" not in json.dumps(record)
-    assert shared_metric_rows == []
 
 
-def test_codex_compact_that_raises_logs_one_record_and_reraises_the_same_error(caplog, shared_metric_rows):
+def test_codex_compact_that_raises_logs_one_record_and_reraises_the_same_error(caplog):
     error = RuntimeError(f"boom {SECRET}")
     agent = _codex_agent(error, "hermes")
 
@@ -237,10 +224,9 @@ def test_codex_compact_that_raises_logs_one_record_and_reraises_the_same_error(c
     )
     assert (record["route"], record["attempt_id"]) == ("codex_app_server", agent._compression_attempt_id)
     assert SECRET not in json.dumps(record) and "boom" not in json.dumps(record)
-    assert shared_metric_rows == []
 
 
-def test_codex_route_refused_for_a_required_checkpoint_logs_one_record_and_raises(caplog, shared_metric_rows):
+def test_codex_route_refused_for_a_required_checkpoint_logs_one_record_and_raises(caplog):
     agent = _codex_agent(TurnResult(thread_id="t1"), "hermes")
     agent.compression_checkpoint_required = True
 
@@ -253,15 +239,8 @@ def test_codex_route_refused_for_a_required_checkpoint_logs_one_record_and_raise
         "aborted", "exception:CompressionCheckpointUnavailable", "codex_app_server"
     )
     assert record["attempt_id"] == agent._compression_attempt_id
-    assert shared_metric_rows == []
 
 
-@pytest.mark.parametrize(
-    "trigger", ["idle", "turn_start_threshold", "engine_preflight", "pre_api", "post_tool", "gateway_hygiene"]
-)
-def test_precise_automatic_triggers_keep_the_coarse_shared_metric_bucket(trigger):
-    fields = compression_fields(trigger=trigger, outcome="success", tokens_before=1, context_length=10)
-    assert fields["trigger"] == "auto"
 
 
 def test_blocked_record_never_carries_the_cooldown_seconds(caplog):
@@ -467,7 +446,7 @@ def test_committed_effect_includes_the_retained_partial_compression_tail(
     assert record["tokens_reclaimed"] == record["tokens_before"] - record["tokens_after"]
 
 
-def test_engine_that_returns_an_empty_transcript_logs_one_aborted_record(caplog, shared_metric_rows):
+def test_engine_that_returns_an_empty_transcript_logs_one_aborted_record(caplog):
     """An engine that hands back no messages for a non-empty transcript is refused before any split, and the
     attempt still logs its one record and counts once."""
     agent = _Agent(_compressor())
@@ -481,4 +460,3 @@ def test_engine_that_returns_an_empty_transcript_logs_one_aborted_record(caplog,
     [record] = _attempt_records(caplog)
     assert (record["commit_status"], record["failure_class"]) == ("aborted", "empty_transcript")
     assert (record["trigger_source"], record["method"]) == ("pre_api", "none")
-    assert [(row["outcome"], row["failure_class"]) for row in shared_metric_rows] == [("failed", "empty_transcript")]

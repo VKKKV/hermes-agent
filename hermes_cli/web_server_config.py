@@ -214,7 +214,6 @@ _CATEGORY_MERGE: dict[str, str] = {
     "telegram": "discord",
     "mcp": "agent",
     "computer_use": "agent",
-    "telemetry": "security",
     "plugins": "agent",
     "doctor": "general",
     # `runtime.nofile_soft_limit` (#78873) is the only schema-surfaced runtime field — fold it into the

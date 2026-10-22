@@ -113,15 +113,6 @@ export const en: Translations = {
     multiplexStandaloneBanner:
       "Your gateway serves only one profile. Not served: {profiles}. Why: {reason}. Fix: hermes gateway migrate --multiplex",
     dismiss: "Dismiss",
-    sharedMetricsTitle: "Help improve Hermes?",
-    sharedMetricsBody:
-      "Shared metrics are bounded counters, never prompts, files, paths or error text. Sharing sends them to Nous once a day.",
-    sharedMetricsReaskBody:
-      "Asking once more: an earlier version could save \"No thanks\" before you saw this question.",
-    sharedMetricsShare: "Share with Nous",
-    sharedMetricsOff: "No thanks",
-    sharedMetricsDetails: "Details",
-    sharedMetricsSaveFailed: "Couldn't save your choice",
   },
 
   status: {

@@ -18,7 +18,6 @@ import uuid
 
 import pytest
 
-from hermes_cli.observability.shared_metrics_consent import OFFER_VERSION
 
 from tests.gateway.test_normal_runtime_boot import control
 
@@ -41,7 +40,7 @@ def test_native_classic_fresh_resume_and_oneshot(tmp_path, model_peer, request):
         "auxiliary": {"title_generation": {"enabled": False}},
         # Answered at the current offer version, as tests/fakes/fake_llm_provider.write_hermes_home
         # does: main's interactive chat asks it first on a home that never answered.
-        "telemetry": {"shared_metrics": {"enabled": False, "send": False, "offer_version": OFFER_VERSION}},
+        "telemetry": {"shared_metrics": {"enabled": False, "send": False, "offer_version": "removed"}},
     }))
     env = {k: os.environ[k] for k in ("PATH", "LANG", "TZ") if k in os.environ}
     env.update(HOME=str(user), USERPROFILE=str(user), HERMES_HOME=str(home),

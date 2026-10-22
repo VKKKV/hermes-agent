@@ -141,10 +141,6 @@ def _bundled_plugin_selected(home: Path, plugin: str) -> bool:
     return listed("enabled") and not listed("disabled")
 
 
-def langfuse_in_use(home: Path, *, process_env: bool = False) -> bool:
-    """What made core trace to Langfuse for *home*: the bundled ``observability/langfuse`` selected
-    (:func:`_bundled_plugin_selected`). The plugin was opt-in, so keys in ``.env`` alone are not use."""
-    return _bundled_plugin_selected(home, "langfuse")
 
 
 @dataclass(frozen=True)
@@ -196,14 +192,6 @@ LEFT_CORE: tuple[LeftCoreFeature, ...] = (
         unchanged="your Spotify login, the spotify toolset and the spotify_* tools are unchanged; "
                   "`hermes auth spotify` is now `hermes spotify login`",
         cli="spotify",
-    ),
-    LeftCoreFeature(
-        plugin="langfuse", label="Langfuse", in_use=langfuse_in_use,
-        unchanged="your Langfuse keys and HERMES_LANGFUSE_* settings are unchanged; the plugin is now "
-                  "`langfuse` (was observability/langfuse)",
-        secret_env=("HERMES_LANGFUSE_SECRET_KEY",),
-        private_env=("HERMES_LANGFUSE_PUBLIC_KEY", "HERMES_LANGFUSE_BASE_URL"),
-        plugin_key="observability/langfuse",
     ),
 )
 

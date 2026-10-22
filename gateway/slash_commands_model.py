@@ -389,28 +389,6 @@ class GatewayModelCommandsMixin:
             lock = self.__dict__["_model_switch_lock_obj"] = asyncio.Lock()
         return lock
 
-    def _record_switch_metrics(self, result, ctx: _ModelSwitchContext, source) -> None:
-        """Slash dispatch does not install the routed profile's scope, so a multiplexed runner binds
-        the owning home for the switch row and its switch_away friction."""
-        from hermes_cli.observability.shared_metrics_events import record_model_switch
-        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
-
-        home = None
-        if getattr(getattr(self, "config", None), "multiplex_profiles", False):
-            with contextlib.suppress(Exception):
-                home = self._resolve_profile_home_for_source(source)
-        session_id = None
-        with contextlib.suppress(Exception):
-            session_id = getattr(self._cached_agent_for(ctx.session_key), "session_id", None)
-        token = set_hermes_home_override(str(home)) if home else None
-        try:
-            record_model_switch(
-                from_provider=ctx.route_provider, to_provider=result.target_provider, surface="gateway",
-                from_model=ctx.current_model, session_id=session_id)
-        finally:
-            if token is not None:
-                reset_hermes_home_override(token)
-
     async def _commit_model_switch_locked(self, result, ctx: _ModelSwitchContext, *, source, picker: bool) -> str:
         one_turn = False if picker else ctx.one_turn
         from gateway.session_setting_commands import defer_local_model_pick, local_authority_live
@@ -425,7 +403,6 @@ class GatewayModelCommandsMixin:
             effort = (ctx.reasoning_effort or "").strip().lower()
             level = effort if parse_reasoning_effort(effort) is not None else ""
             await asyncio.to_thread(defer_local_model_pick, authority, live, result, level)
-            self._record_switch_metrics(result, ctx, source)
             global_error = None
             if ctx.persist_global:
                 try:
@@ -437,7 +414,6 @@ class GatewayModelCommandsMixin:
             error = self._switch_cached_agent_model(result, ctx, picker)
             if error is not None:
                 return error
-            self._record_switch_metrics(result, ctx, source)
             global_error = await self._record_model_switch(
                 result, ctx, source=source, one_turn=one_turn, picker=picker)
         reply = await self._model_switch_confirmation(
@@ -654,8 +630,7 @@ class GatewayModelCommandsMixin:
             available_personalities,
             describe_personality,
             persist_personality,
-            resolve_personality,
-        )
+            resolve_personality)
 
         args = event.get_command_args().strip()
         try:

@@ -25,7 +25,6 @@ import { type Codec, Codecs, persistentAtom } from '@/lib/persisted'
 import { arraysEqual, insertUniqueId, readKey } from '@/lib/storage'
 import { modeBound, modeLayout } from '@/store/interface-mode'
 
-import { trackArea } from './desktop-metrics'
 import { $paneStates, ensurePaneRegistered, setPaneOpen, setPaneWidthOverride } from './panes'
 import { $showAllProfiles, setShowAllProfiles } from './profile'
 import type { PullRequestBucket } from './pull-requests'
@@ -654,7 +653,6 @@ export function toggleFileBrowserOpen() {
   const open = restoreMinimizedTreeSide(fileBrowserSide()) || !$fileBrowserOpen.get()
   $fileBrowserOpen.set(open)
   setTreeSideCollapsed(fileBrowserSide(), !open)
-  trackArea('file_pane', open)
 }
 
 export function setFileBrowserOpen(open: boolean) {

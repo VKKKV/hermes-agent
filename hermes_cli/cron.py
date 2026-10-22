@@ -316,9 +316,6 @@ def cron_tick():
     No gateway runs here by definition, and none is started: agent jobs are skipped with a logged
     reason until the gateway is up (headless surfaces refuse rather than spawn)."""
     from cron.scheduler import CronTickYielded, tick
-    from hermes_cli.observability.shared_metrics_process import begin_process
-
-    begin_process("cron")
     try:
         tick(verbose=True, headless=True)
     except CronTickYielded as exc:

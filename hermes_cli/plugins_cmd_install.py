@@ -526,7 +526,7 @@ def _publish_failure_class(exc: BaseException) -> str:
     keeps the class plugins_transaction tagged, a filesystem error keeps its kind, and everything
     else PM raised (InstallError, ResolutionConflict, AdmissionRefused, a worker error) is a
     dependency failure."""
-    from hermes_cli.observability.shared_metrics_fields import tagged_failure_class
+    from hermes_cli.error_classification import tagged_failure_class
 
     tagged = tagged_failure_class(exc) if isinstance(exc, _pc().PluginOperationError) else None
     if tagged and tagged != "other":
@@ -539,22 +539,6 @@ def _publish_failure_class(exc: BaseException) -> str:
 # ---- end iuf c1 ----
 
 
-def recorded_install(install: Callable[[], tuple], *, catalog_name: Optional[str], identifier: str) -> tuple:
-    """Run one plugin install attempt (a core ``(target, manifest, installed_name)`` call) and record
-    it as a shared-metrics extension install: failed when it raises, success unless it replaced an
-    already-installed plugin (a reinstall is not an install)."""
-    from hermes_cli.observability.shared_metrics_events import record_extension_install
-
-    source = "catalog" if catalog_name else ("local" if identifier.startswith("file://") else "url")
-    before = set(_pc()._read_install_metadata())
-    try:
-        result = install()
-    except Exception as exc:
-        record_extension_install(kind="plugin", source=source, name=catalog_name, outcome="failed", error=exc)
-        raise
-    if result[2] not in before:
-        record_extension_install(kind="plugin", source=source, name=catalog_name, outcome="success")
-    return result
 
 
 def cmd_install(
@@ -617,8 +601,7 @@ def cmd_install(
             python_deps=not no_deps, allow_removed=allow_removed, assume_deps_consent=yes_deps)
 
     try:
-        target, installed_manifest, installed_name = recorded_install(
-            _install, catalog_name=entry.name if entry is not None else None, identifier=identifier)
+        target, installed_manifest, installed_name = _install()
     except _pc().PluginOperationError as e:
         _pc()._fail(console, f"[red]{'Blocked' if isinstance(e, _pc().PluginScanBlocked) else 'Error'}:[/red] {e}")
     if not _pc()._looks_like_plugin_dir(target):
@@ -810,8 +793,7 @@ def _place_tree(entry, identifier: str, *, force: bool, ref: Optional[str], assu
 
     step(InstallPhase.downloading)
     try:
-        return recorded_install(_install, catalog_name=entry.name if entry is not None else None,
-                                identifier=identifier)
+        return _install()
     except _pc().PluginScanBlocked as exc:
         return scan_blocked_result(exc)
     except _pc().PluginOperationError as exc:

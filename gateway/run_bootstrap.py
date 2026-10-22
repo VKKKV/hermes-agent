@@ -669,7 +669,7 @@ async def _start_gateway_run_runner(runner, _signal_initiated_shutdown: list) ->
     """MCP discovery, then ``runner.start()``. Returns the exit verdict when the process must end
     before running mode (start failed, clean exit, aborted startup); None to continue into cron."""
     from gateway.run import (_discover_gateway_mcp_tools, _resolve_gateway_exit_verdict,
-                             _shutdown_gateway_health_export, _shutdown_mcp_servers_nonblocking)
+                             _shutdown_mcp_servers_nonblocking)
     # discover_mcp_tools() blocks up to 120s; on the loop thread it would freeze platform heartbeats.
     try:
         # MCP tool discovery — run in an executor so the asyncio event loop stays responsive even when a
@@ -680,17 +680,11 @@ async def _start_gateway_run_runner(runner, _signal_initiated_shutdown: list) ->
     except Exception:
         logger.debug("MCP tool discovery failed (non-fatal)", exc_info=True)
 
-    try:
-        success = await runner.start()
-    except BaseException:
-        _shutdown_gateway_health_export(runner)
-        raise
+    success = await runner.start()
     if not success:
-        _shutdown_gateway_health_export(runner)
         return False
 
     if runner.should_exit_cleanly:
-        _shutdown_gateway_health_export(runner)
         if runner.exit_reason:
             logger.error("Gateway exiting cleanly: %s", runner.exit_reason)
         # Explicit exit codes (GATEWAY_FATAL_CONFIG_EXIT_CODE) must propagate so s6 finish maps 78 → 125.
@@ -699,15 +693,12 @@ async def _start_gateway_run_runner(runner, _signal_initiated_shutdown: list) ->
         return True
     if not runner._running:
         # Startup aborted by restart/shutdown before running mode; preserve that path without starting cron.
+        await runner.wait_for_shutdown()
         try:
-            await runner.wait_for_shutdown()
-            try:
-                await _shutdown_mcp_servers_nonblocking(config=getattr(runner, "config", None))
-            except Exception:
-                logger.warning("MCP shutdown failed; connections may be left open", exc_info=True)
-            return _resolve_gateway_exit_verdict(runner, _signal_initiated_shutdown[0])
-        finally:
-            _shutdown_gateway_health_export(runner)
+            await _shutdown_mcp_servers_nonblocking(config=getattr(runner, "config", None))
+        except Exception:
+            logger.warning("MCP shutdown failed; connections may be left open", exc_info=True)
+        return _resolve_gateway_exit_verdict(runner, _signal_initiated_shutdown[0])
     return None
 
 

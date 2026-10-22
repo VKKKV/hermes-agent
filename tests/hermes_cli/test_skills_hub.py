@@ -758,9 +758,6 @@ def test_built_in_restore_survives_leftovers_and_records_every_outcome_as_bundle
     for stale in [n for n in vars(hub) if n.isupper() and n.endswith(("_DIR", "_FILE", "_LOG"))]:
         monkeypatch.delitem(vars(hub), stale)
     monkeypatch.setattr(cli_hub, "_sources", lambda: pytest.fail("a bundled skill must not hit the hub"))
-    rows = []
-    monkeypatch.setattr("hermes_cli.observability.shared_metrics_events.record_extension_install",
-                        lambda **row: rows.append((row["source"], row["outcome"])))
     src = dict(skills_sync._discover_bundled_skills(skills_sync._get_bundled_dir()))["llm-wiki"]
     dest = skill_usage._skills_dir() / src.parent.name / "llm-wiki"
     console, _sink = _sink_console()
@@ -777,7 +774,6 @@ def test_built_in_restore_survives_leftovers_and_records_every_outcome_as_bundle
 
     (real / "llm-wiki" / "SKILL.md").unlink()  # missing behind the symlink: refused, and still bundled
     assert cli_hub.do_install("llm-wiki", console=console, skip_confirm=True) is False
-    assert rows == [("bundled", "success"), ("bundled", "failed")]
 
 
 def test_built_in_restore_into_a_leftover_dir_never_writes_through_links_or_over_user_files(tmp_path):

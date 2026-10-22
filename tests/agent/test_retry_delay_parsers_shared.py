@@ -41,13 +41,6 @@ class TestRetryAfterHeaderOneParser:
         ctx = extract_api_error_context(err)
         assert 85 <= ctx["reset_at"] - time.time() <= 91
 
-    def test_metrics_sender_clamps_on_top_of_the_shared_parser(self):
-        from hermes_cli.observability.shared_metrics_sender import _retry_after_seconds
-
-        assert _retry_after_seconds(_http_date(120), 7) in (119, 120)
-        assert _retry_after_seconds("0", 7) == 1          # floor survives
-        assert _retry_after_seconds("99999999", 7) == 86_400  # cap survives
-        assert _retry_after_seconds("garbage", 7) == 7
 
 
 class TestResetDelayOneTable:

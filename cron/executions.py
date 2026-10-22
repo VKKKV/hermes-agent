@@ -22,7 +22,6 @@ from typing import Any, Dict, Iterator, List, Optional
 from hermes_constants import get_hermes_home
 from hermes_time import now as _hermes_now
 from cron.constants import CLAIM_TTL_INACTIVITY_HEADROOM
-from hermes_cli.observability.shared_metrics_gateway import record_cron_finish
 
 logger = logging.getLogger(__name__)
 
@@ -336,7 +335,6 @@ def finish_execution(
         _prune_unlocked(conn)
         record = _fetch(conn, execution_id)
     _emit_execution_state(record, delivery_outcome=delivery_outcome)
-    record_cron_finish(record, delivery_outcome)
     return record
 
 
@@ -359,7 +357,6 @@ def recover_receipted_execution(execution_id, job_id, *, success, error=None, de
         _prune_unlocked(conn)
         record = _fetch(conn, execution_id)
     _emit_execution_state(record, delivery_outcome=delivery_outcome)
-    record_cron_finish(record, delivery_outcome)
     return record
 
 

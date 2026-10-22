@@ -1,9 +1,23 @@
+type ErrorToastCategory =
+  | 'api_key_missing'
+  | 'api_key_rejected'
+  | 'disk_full'
+  | 'gateway_auth_failed'
+  | 'method_not_allowed'
+  | 'microphone_permission'
+  | 'other'
+  | 'pool_slot_timeout'
+  | 'restart_required'
+  | 'rpc_out_of_sync'
+  | 'storage_failure'
+  | 'timeout'
+  | 'unclassified'
+
 import { atom } from 'nanostores'
 
 import { translateNow } from '@/i18n'
 import { isOutOfSyncRpcParams } from '@/lib/gateway-rpc'
 import { isTimeoutError } from '@/lib/with-timeout'
-import { type ErrorToastCategory, recordFriction } from '@/store/desktop-metrics'
 import { requestBackendRestart, requestRoute } from '@/store/recovery-requests'
 
 export type NotificationKind = 'error' | 'warning' | 'info' | 'success'
@@ -285,7 +299,6 @@ function showNotification(input: NotificationInput, errorCategory: ErrorToastCat
   const kind = input.kind ?? 'info'
 
   if (errorCategory) {
-    recordFriction('error_toast', errorCategory)
   }
 
   const id = input.id ?? `${Date.now()}-${notificationCounter++}`

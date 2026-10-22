@@ -38,7 +38,6 @@ SKIP_BROWSER=false
 SKIP_COMPUTER_USE=false
 INSTALL_LADDER=false
 INSTALL_STARTED=0
-INSTALL_RUN_ID=""
 FAILURE_CLASS=""
 INSTALL_SIGNAL=""
 INSTALL_IN_STAGE=false
@@ -133,25 +132,6 @@ error_line() {
     printf '%s' "${pick:0:240}"
 }
 
-# One local receipt per full-ladder run, under the profile's shared-metrics dir.
-# Only closed tokens and two timestamps (never STAGE_REASON, paths or URLs); the
-# installer never sends anything. Hermes reports it as hermes.install.run on a
-# later start only while shared metrics collection is on, and deletes it
-# unreported when collection is off. Best effort: never fails the install.
-write_install_receipt() {
-    # $1 outcome, $2 failed stage, $3 failure class. One file per run: the first writer wins.
-    # A failed write (full disk) removes its partial temp file: the reader never sees dotfiles.
-    {
-        local dir="$HERMES_HOME/telemetry/shared_metrics/pending_installs" id="$INSTALL_RUN_ID"
-        [ -n "$id" ] && [ ! -e "$dir/$id.json" ] && mkdir -p "$dir" && {
-            printf '{"id":"%s","installer":"install_sh","outcome":"%s","failed_stage":"%s","failure_class":"%s","started_at":%s,"finished_at":%s}\n' \
-                "$id" "$1" "$2" "$3" "$INSTALL_STARTED" "$(date +%s)" > "$dir/.$id.tmp" \
-                && mv -f "$dir/.$id.tmp" "$dir/$id.json" \
-                || rm -f "$dir/.$id.tmp"
-        }
-    } >/dev/null 2>&1 || :
-}
-
 # Ladder signal handling. The traps only note the signal while a stage owns the
 # terminal: bash runs a trap once the foreground stage returns, and that stage's
 # result decides. A stage whose child caught Ctrl-C and succeeded (setup's
@@ -173,7 +153,6 @@ install_interrupted() {
     # Record the stage the signal cut off, then die by that signal (exit code if it is blocked).
     local stage="${s:-prerequisites}" sig="${INSTALL_SIGNAL:-INT}" code=130
     case "$sig" in HUP) code=129 ;; TERM) code=143 ;; esac
-    write_install_receipt failed "${stage//-/_}" interrupted
     trap - INT TERM HUP EXIT
     kill -s "$sig" "$$" 2>/dev/null
     exit "$code"
@@ -483,7 +462,6 @@ stage_result() {
         # (pm, source_completion, `hermes setup`) still reaches the stage's `|| fail ... <class>`.
         case "$code" in 129|130|143) class=interrupted ;; esac
         [ "${STAGE_INTERRUPTED:-false}" = false ] || class=interrupted
-        write_install_receipt failed "${STAGE//-/_}" "$class"
     fi
 }
 
@@ -1249,11 +1227,6 @@ if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
     elif [ -z "$STAGE" ]; then
         INSTALL_LADDER=true
         INSTALL_STARTED="$(date +%s 2>/dev/null)"
-        INSTALL_RUN_ID="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')" || INSTALL_RUN_ID=""
-        [ "${#INSTALL_RUN_ID}" -eq 32 ] || INSTALL_RUN_ID="$(printf '%08x%08x%08x%08x' "$(( RANDOM * 32768 + RANDOM ))" "$$" "${INSTALL_STARTED:-0}" "$RANDOM")"
-        # No clock, no receipt: the reader drops a receipt without both timestamps anyway.
-        case "$INSTALL_STARTED" in ''|*[!0-9]*) INSTALL_RUN_ID="" ;; esac
-        trap '[ "$?" -eq 0 ] || write_install_receipt failed prerequisites "${FAILURE_CLASS:-other}"' EXIT
         # Ctrl-C, SIGTERM or a closed terminal (SIGHUP) anywhere in the run: one `interrupted` receipt.
         trap 'install_signal INT' INT
         trap 'install_signal TERM' TERM
@@ -1289,10 +1262,8 @@ if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
         esac
         [ -z "$INSTALL_SIGNAL" ] || install_interrupted
         # The stage normally wrote its receipt; one killed outright (SIGKILL, OOM) did not.
-        write_install_receipt failed "${s//-/_}" other
         exit "$rc"
     done
-    write_install_receipt success none none
     # Every stage finished: the receipt says success, and a pending TERM/HUP still ends the run.
     [ -z "$INSTALL_SIGNAL" ] || install_interrupted
     trap - INT TERM HUP

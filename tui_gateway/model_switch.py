@@ -309,8 +309,7 @@ def _apply_model_switch(
     sid: str, session: dict, raw_input: str, *, confirm_expensive_model: bool = False,
     pin_session_override: bool = True, parsed_flags: Any | None = None,
     persist_override: bool | None = None, count_switch: bool = True) -> dict:
-    """``count_switch=False``: an internal swap (config adoption, MoA one-shot and its restore), not a
-    user's /model pick, so it stays out of the shared-metrics switch count."""
+    """Apply a model switch; ``count_switch`` is an ignored compatibility keyword."""
     from hermes_cli.model_switch import switch_model
     model_input, explicit_provider, one_turn, persist_global, reasoning_effort = _switch_request(
         raw_input, parsed_flags, persist_override)
@@ -373,13 +372,6 @@ def _apply_model_switch(
         persist_model_selection(result)
     if reasoning_effort:
         _apply_switch_reasoning(sid, session, agent, reasoning_effort, persist_global=persist_global, one_turn=one_turn)
-    if count_switch:
-        from hermes_cli.observability.shared_metrics_events import record_model_switch
-
-        record_model_switch(
-            from_provider=_switch_away_provider(agent, explicit_provider, current_provider),
-            to_provider=result.target_provider, surface=_session_source(session), from_model=current_model,
-            session_id=getattr(agent, "session_id", None))
     return {
         "value": result.new_model, "warning": result.warning_message or "",
         "confirm_required": False,

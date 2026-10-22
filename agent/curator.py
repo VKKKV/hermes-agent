@@ -924,7 +924,6 @@ def run_curator_review(
     recorded in ``state.last_report_path`` so users can read what WOULD have happened."""
     consolidate = get_consolidate() if consolidate is None else consolidate
     start = datetime.now(UTC)
-    hermes_home = get_hermes_home()  # the LLM pass may run on a thread with no profile binding
     if dry_run:  # count candidates without mutating state
         counts = {"checked": len(_safe_curated_report()), "marked_stale": 0, "archived": 0, "reactivated": 0}
     else:
@@ -981,7 +980,6 @@ def run_curator_review(
         except Exception as e:
             logger.debug("Curator report write failed: %s", e, exc_info=True)
         save_state(state2)
-        _record_run_metric(trigger, dry_run, counts, before_report, after_report, llm_meta, hermes_home)
         _notify(on_summary, f"curator: {final_summary}")
 
     if synchronous:
@@ -998,23 +996,6 @@ def run_curator_review(
         ctx = copy_context()
         threading.Thread(target=ctx.run, args=(_llm_pass,), daemon=True, name="curator-review").start()
     return {"started_at": start.isoformat(), "auto_transitions": counts, "summary_so_far": auto_summary}
-
-
-# --- Provider/model resolution for the review fork ---
-
-def _record_run_metric(trigger, dry_run, counts, before_report, after_report, llm_meta, hermes_home) -> None:
-    from hermes_cli.observability.shared_metrics_loop import record_curator_run
-
-    def what_changed() -> dict[str, int]:
-        before, after = _by_name(before_report), _by_name(after_report)
-        diff = _diff_and_classify(set(before), set(after), llm_meta.get("tool_calls") or [], llm_meta.get("final") or "")
-        patched = sum(int(after[n].get("patch_count") or 0) > int(before[n].get("patch_count") or 0)
-                      for n in diff.after_names & set(before))
-        return {"archived": int(counts.get("archived", 0)) + len(diff.removed), "created": len(diff.added),
-                "merged": len(diff.consolidated), "patched": patched}
-
-    outcome = "skipped" if dry_run else "failed" if llm_meta.get("error") else "success"
-    record_curator_run(trigger=trigger, outcome=outcome, counts=what_changed, hermes_home=hermes_home)
 
 
 class _ReviewRuntimeBinding(NamedTuple):

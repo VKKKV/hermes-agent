@@ -19,9 +19,9 @@ Behavior-changing request or execution wrappers are outside this observer
 contract. Observer hooks should report what happened; they should not replace
 provider requests, tool arguments, or execution callbacks.
 
-Hermes also has a first-party NeMo Relay shared-metrics path. It uses these
-lifecycle boundaries directly and does not require enabling an observability
-plugin. See [Relay shared metrics](relay-shared-metrics.md).
+This fork removes the built-in shared-metrics collector and sender. Lifecycle
+hooks remain available for explicit user-installed plugins; they are not an
+implicit permission to export data.
 
 ## Contract
 
@@ -343,4 +343,4 @@ lifecycles to Relay. Relay's discovered user and system configuration, or an
 explicit file selected with `HERMES_NEMO_RELAY_PLUGINS_TOML`, can add
 [ATOF, ATIF, or OTEL](https://docs.nvidia.com/nemo/relay/configure-plugins/observability/about)
 exporters and execution middleware; see
-[Relay shared metrics](relay-shared-metrics.md).
+the [middleware contract](middleware.md).

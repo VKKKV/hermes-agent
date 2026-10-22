@@ -1483,19 +1483,6 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           return
         }
 
-        // Shared metrics count each command the user typed exactly once, here, whether the desktop
-        // handles it locally or on the gateway (which no longer counts slash.exec itself). An alias
-        // re-dispatch (recordInput=false) and programmatic calls (typed=false) are not user input.
-        if (recordInput && options?.typed !== false) {
-          // The entry-time runtime: the metric rides the same pinned destination.
-          const metricsSessionId = sessionHint || initialRuntimeId
-
-          void requestGateway('shared_metrics.slash_command', {
-            command: name,
-            ...(metricsSessionId ? { session_id: metricsSessionId } : {})
-          }).catch(() => undefined)
-        }
-
         const ctx: SlashActionCtx = { arg, command, name, recordInput, sessionHint }
         const surface = resolveDesktopCommand(`/${name}`)?.surface
 

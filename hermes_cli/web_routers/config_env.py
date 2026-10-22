@@ -13,16 +13,13 @@ import urllib.parse
 from fastapi import APIRouter
 from hermes_cli.web_routers._common import (
     REDACTED_CREDENTIAL_WRITE_DETAIL, http_failure, is_redacted_credential_preview,
-    redacted_credential_preview, scoped_to_thread,
-)
+    redacted_credential_preview, scoped_to_thread)
 from hermes_cli.web_deps import LateState, late
 from hermes_cli.web_server_config import (
     _apply_main_model_assignment, _denormalize_config_from_web, _normalize_config_for_web, _schema_with_dynamic_provider_options,
-    _validated_main_model_selection,
-)
+    _validated_main_model_selection)
 from hermes_cli.web_server_profiles import (
-    _approval_mode_of, _broadcast_gateway_session_info, _is_other_profile, _parse_model_entries,
-)
+    _approval_mode_of, _broadcast_gateway_session_info, _is_other_profile, _parse_model_entries)
 from fastapi import HTTPException, Request
 from hermes_cli.config import DEFAULT_CONFIG, OPTIONAL_ENV_VARS, read_raw_config, require_readable_config_before_write, custom_endpoint_key_env, coerce_provider_id, find_provider_entry, get_compatible_custom_providers, _ENV_REF_RE, _deep_merge
 from hermes_cli.config_providers import _canonical_api_mode, _custom_provider_entry_to_provider_config
@@ -342,11 +339,8 @@ def _save_env_credential(key: str, value: str, provider_setup: bool = False) -> 
     """Save under the request's profile scope; a new provider API key also counts as a provider setup."""
     from hermes_cli.config import load_env
     from hermes_cli.credential_lifecycle import save_provider_env_credential
-    from hermes_cli.observability.shared_metrics_setup import record_api_key_saved, web_setup_surface
 
-    previous = load_env().get(key)
     result = save_provider_env_credential(key, value)
-    record_api_key_saved(key, value, previous, web_setup_surface(), connecting=provider_setup)
     return result
 
 
@@ -747,26 +741,12 @@ def upsert_custom_endpoint(body: CustomEndpointUpdate, profile: Optional[str] = 
         # drop this write (or vice versa).
         with _config_profile_scope(profile), _CONFIG_MUTATION_LOCK:
             cfg = load_config()
-            providers = cfg.get("providers")
-            created = _resolve_custom_endpoint_entry(
-                providers if isinstance(providers, dict) else {}, body.id or body.name)[1] is None
             endpoint_id, _entry = _write_custom_endpoint(cfg, body)
             save_config(cfg)
             response = _custom_endpoint_response(cfg)
-            from hermes_constants import get_hermes_home
-            home = get_hermes_home()
-        if created:  # editing an endpoint that exists sets nothing new up
-            _record_custom_endpoint_setup(home)
         response["ok"] = True
         response["id"] = endpoint_id
         return response
-
-
-def _record_custom_endpoint_setup(home: Any) -> None:
-    """Counted after the config lock is released (a cold metrics runtime must not stall writers)."""
-    from hermes_cli.observability.shared_metrics_setup import record_provider_setup_done, web_setup_surface
-
-    record_provider_setup_done(web_setup_surface(), "custom", hermes_home=home, background=True)
 
 
 @router.post("/api/providers/custom-endpoints/{endpoint_id}/activate")

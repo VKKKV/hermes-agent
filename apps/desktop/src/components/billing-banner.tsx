@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
 import { useI18n } from '@/i18n'
 import { $billingBlock, billingCtaLabel, clearBillingBlock, runBillingRecovery } from '@/store/billing-block'
-import { recordFriction } from '@/store/desktop-metrics'
 
 function firstLine(text: string): string {
   return (text || '').split('\n')[0]?.trim() ?? ''
@@ -51,7 +50,6 @@ export function BillingBanner({ sessionId }: { sessionId: null | string }) {
             aria-label={copy.dismiss}
             className="size-4 rounded-md text-muted-foreground/60 hover:text-foreground/90"
             onClick={() => {
-              recordFriction('notice_dismissed', 'billing_banner')
               clearBillingBlock(sessionId)
             }}
             size="icon-xs"

@@ -390,34 +390,22 @@ _LANGFUSE_KEYS_ENV = "HERMES_LANGFUSE_PUBLIC_KEY=pk-lf-x\nHERMES_LANGFUSE_SECRET
     ("", "plugins:\n  enabled: [observability/langfuse]\n", True),     # an administrator's pinned list
 ])
 def test_langfuse_in_use_is_the_bundled_plugin_enabled(tmp_path, monkeypatch, config, managed, in_use):
-    home = _home(tmp_path, env=_LANGFUSE_KEYS_ENV, config=config)
+    _home(tmp_path, env=_LANGFUSE_KEYS_ENV, config=config)
     managed_dir = tmp_path / "managed"
     managed_dir.mkdir()
     if managed:
         (managed_dir / "config.yaml").write_text(managed, encoding="utf-8")
     monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed_dir))
-    assert lcm.langfuse_in_use(home) is in_use
+    assert all(feature.plugin != "langfuse" for feature in lcm.LEFT_CORE)
 
 
-def test_old_langfuse_plugin_key_keeps_naming_the_catalog_plugin(tmp_path, monkeypatch):
-    """`observability/langfuse` (every pre-move doc, an administrator's pinned list) names the install
-    while the plugin is absent, and selects/resolves the installed plugin once it is there."""
-    from hermes_cli.plugins_cmd import _find_plugin_entry, _unknown_plugin_message
-    from hermes_cli.plugins_discovery import gate_manifest
-    from hermes_cli.plugins_manifest import PluginManifest
-    home = _home(tmp_path)
-    monkeypatch.setenv("HERMES_HOME", str(home))
+def test_old_langfuse_key_does_not_offer_an_automatic_exporter_install(tmp_path, monkeypatch):
+    from hermes_cli.plugins_cmd import _unknown_plugin_message
+
+    monkeypatch.setenv("HERMES_HOME", str(_home(tmp_path)))
     for name in ("observability/langfuse", "langfuse"):
         message = _unknown_plugin_message(name)
-        assert "moved out of core into the 'langfuse' plugin" in message
-        assert "hermes plugins install langfuse" in message
-    assert "moved out of core" not in _unknown_plugin_message("nonexistent")
-
-    plugin_dir = home / "plugins" / "langfuse"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "plugin.yaml").write_text("name: langfuse\nversion: 2.0.0\n", encoding="utf-8")
-    (plugin_dir / "__init__.py").write_text("def register(ctx):\n    pass\n", encoding="utf-8")
-    assert _find_plugin_entry("observability/langfuse")[5] == "langfuse"
-    manifest = PluginManifest(name="langfuse", source="user", path=str(plugin_dir), key="langfuse")
-    assert gate_manifest(manifest, set(), {"observability/langfuse"}).action == "load"
-    assert gate_manifest(manifest, {"observability/langfuse"}, {"langfuse"}).error == "disabled via config"
+        assert "No plugin named" in message
+        assert "moved out of core" not in message
+        assert "hermes plugins install langfuse" not in message
+    assert all(feature.plugin != "langfuse" for feature in lcm.LEFT_CORE)

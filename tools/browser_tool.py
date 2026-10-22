@@ -23,7 +23,6 @@ from agent.redact import redact_cdp_url
 from hermes_constants import get_hermes_home, hermes_home_key
 from utils import env_int
 from hermes_cli.config import DEFAULT_CONFIG, cfg_get
-from hermes_cli.observability.shared_metrics_loop import record_browser_call
 
 
 # Env keys re-added to the agent-browser subprocess AFTER credential stripping.
@@ -1361,10 +1360,10 @@ def _routed_check_fn(name: str):
 
 def _routed_handler(name: str, fallback):
     def handler(args, **kw):
-        return record_browser_call(lambda legacy: routed_browser_handler(
-            name, args, fallback=lambda: legacy(lambda: fallback(args, kw)),
+        return routed_browser_handler(
+            name, args, fallback=lambda: fallback(args, kw),
             task_id=kw.get("task_id"), session_id=kw.get("session_id"),
-        ), _cloud.browser_backend_name)
+        )
     return handler
 
 

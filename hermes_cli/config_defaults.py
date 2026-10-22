@@ -2089,29 +2089,6 @@ DEFAULT_CONFIG = {
         # TCP timeout before falling back. True skips IPv6 entirely.
         "force_ipv4": False,
     },
-    # Gateway monitoring: service health + redacted operational diagnostics exported over OTLP to an
-    # operator endpoint (OTEL Collector, DataDog, ...). Content-free by construction: no prompts,
-    # messages, tool args/results, session history, usage analytics, audit logs, or trajectories.
-    # Nothing is collected or sent until enabled with an endpoint.
-    "monitoring": {
-        # Stable install identifier on exported signals so operators can tell instances apart. "" =
-        # mint a fresh UUID on first use; clear it to rotate. Carries no account identity.
-        "install_id": "",
-        "gateway_health_export": {  # Gateway health & diagnostics export.
-            "enabled": False,
-            "metrics_enabled": True,
-            "diagnostic_events_enabled": True,
-            "warning_error_events_enabled": True,
-            "export_interval_seconds": 60,
-            "logs_export_interval_seconds": 5,
-            "resource_attributes": {
-                "service.name": "hermes-gateway", "deployment.environment.name": "production"
-            },
-        },
-        # OTLP destination. headers_env maps header names to ENVIRONMENT VARIABLE NAMES (never
-        # secret values); values are read from the environment at export time.
-        "export": {"otlp": {"enabled": False, "endpoint": "", "headers_env": {}}},
-    },
     "gateway": {  # Gateway settings (messaging platforms: Telegram, Discord, Slack, ...).
         "unmanaged_idle_exit_seconds": 600,  # client-auto-started gateway only; 0 disables
         # Seconds a SIGTERM-interrupted agent unwinds before teardown (short: service stop budgets).
@@ -2337,21 +2314,6 @@ DEFAULT_CONFIG = {
         # Desktop first run, root profile only (onboarding_run.py): None = fresh install; true = next launch; false = done
         "run": None,
     },
-    # Privacy-safe aggregate metrics in this profile's local telemetry dir. Collection (`enabled`)
-    # and upload to Nous (`send`) are separate keys that every consent surface sets together; see
-    # website/docs/developer-guide/relay-shared-metrics.md Appendix A for consent/retention.
-    "telemetry": {
-        "shared_metrics": {
-            "enabled": False,
-            # Requires `enabled` (`send` alone logs an error). A package is sent only if its whole
-            # period is inside a recorded consent window.
-            "send": False,
-            # Ingest endpoint (override for staging/local). Deliberately NOT env- overridable.
-            # Non-HTTPS refused unless the host is localhost.
-            "endpoint": "https://telemetry.nousresearch.com/v1/telemetry",
-        },
-    },
-
     "doctor": {
         # Per-probe timeout (seconds) for `hermes doctor --live` real-call probes.
         "live_probe_timeout": 10,
@@ -2553,9 +2515,6 @@ DEFAULT_CONFIG = {
         "placement": "auto",
     },
     "computer_use": {
-        # cua-driver's upstream PostHog telemetry defaults ON; Hermes sets
-        # CUA_DRIVER_RS_TELEMETRY_ENABLED=0 in every child env unless this is true.
-        "cua_telemetry": False,
         # Windows only: opt IN to the per-boot cua-driver-serve logon task. False (default)
         # keeps the driver on-demand — Computer Use starts it per session, exactly as on
         # macOS/Linux, and install/enable flows register no scheduled task (#97389). True

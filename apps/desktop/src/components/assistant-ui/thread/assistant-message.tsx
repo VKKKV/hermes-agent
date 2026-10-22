@@ -67,7 +67,6 @@ import { markAssistantIdSpoken } from '@/lib/spoken-reply'
 import { useEnterAnimation } from '@/lib/use-enter-animation'
 import { cn } from '@/lib/utils'
 import { playSpeechText, stopVoicePlayback } from '@/lib/voice-playback'
-import { DESKTOP_BUTTON_ACTIONS, recordAction } from '@/store/desktop-metrics'
 import { openFreeTierSignIn } from '@/store/free-tier-sign-in'
 import { notifyError } from '@/store/notifications'
 import { startManualProviderOAuth } from '@/store/onboarding'
@@ -987,7 +986,6 @@ const ErrorRecoveryActions: FC = () => {
             className="aui-error-action"
             onClick={() => {
               triggerHaptic('submit')
-              recordAction(DESKTOP_BUTTON_ACTIONS.messageRetry, 'click')
             }}
             type="button"
           >
@@ -1084,7 +1082,6 @@ const AssistantActionBar: FC<MessageActionProps & { durationS?: number }> = ({
           appearance="icon"
           buttonSize="icon"
           label={copy.copy}
-          onCopied={() => recordAction(DESKTOP_BUTTON_ACTIONS.messageCopy, 'click')}
           text={getMessageText}
         />
         {fullResponseAvailable && (
@@ -1100,7 +1097,6 @@ const AssistantActionBar: FC<MessageActionProps & { durationS?: number }> = ({
           <TooltipIconButton
             onClick={() => {
               triggerHaptic('submit')
-              recordAction(DESKTOP_BUTTON_ACTIONS.messageRetry, 'click')
             }}
             tooltip={copy.refresh}
           >

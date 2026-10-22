@@ -777,41 +777,6 @@ function Fail([string]$msg, [string]$Class = "other") {
     throw $msg
 }
 
-# One local receipt per full-ladder run, under the profile's shared-metrics dir.
-# Only closed tokens and two timestamps (never the error text, paths or URLs);
-# the installer never sends anything. Hermes reports it as hermes.install.run on
-# a later start only while shared metrics collection is on, and deletes it
-# unreported when collection is off. Best effort: never fails the install.
-function Write-InstallReceipt([string]$Outcome, [string]$FailedStage, [string]$Class) {
-    if ($script:InstallReceiptWritten) { return }
-    $script:InstallReceiptWritten = $true
-    $tmp = $null  # never a caller's $tmp (dynamic scope) in the catch below
-    try {
-        $dir = Join-Path $HermesHome "telemetry\shared_metrics\pending_installs"
-        New-Item -ItemType Directory -Force -Path $dir | Out-Null
-        $id = [guid]::NewGuid().ToString("N")
-        $json = '{{"id":"{0}","installer":"install_ps1","outcome":"{1}","failed_stage":"{2}","failure_class":"{3}","started_at":{4},"finished_at":{5}}}' -f `
-            $id, $Outcome, ($FailedStage -replace '-', '_'), $Class, $script:InstallStarted, [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-        $tmp = Join-Path $dir ".$id.tmp"
-        [IO.File]::WriteAllText($tmp, $json, (New-Object System.Text.UTF8Encoding $false))
-        Move-Item -LiteralPath $tmp -Destination (Join-Path $dir "$id.json") -Force
-    } catch {
-        # A full disk leaves a partial temp file the reader never looks at (it skips dotfiles).
-        if ($tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
-    }
-}
-
-# The receipt class for a ladder stage that threw. A native child Ctrl-C ended
-# (130, or Windows STATUS_CONTROL_C_EXIT 0xC000013A) is a user abort even when
-# the host did not stop the pipeline first; it beats the stage's own class.
-# (A Ctrl-C the host saw stops the pipeline: catch is skipped and finally
-# records `interrupted`.)
-function Get-StageFailureClass {
-    if ($global:LASTEXITCODE -in @(130, -1073741510, 3221225786)) { return "interrupted" }
-    if ($script:FailureClass) { return $script:FailureClass }
-    return "other"
-}
-
 function Emit-Frame([bool]$ok, [string]$name, [bool]$skipped, [string]$reason = "") {
     $frame = [ordered]@{ ok = $ok; stage = $name; skipped = $skipped }
     if ($reason) { $frame.reason = $reason }
@@ -1650,7 +1615,6 @@ if ($Stage) {
 # manifest prints, so -IncludeDesktop inserts desktop here too.
 $script:InstallStarted = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 $script:InstallStage = "prerequisites"
-$script:InstallReceiptWritten = $false
 try {
     Write-Banner
     foreach ($s in $Stages) {
@@ -1658,15 +1622,10 @@ try {
         $script:FailureClass = ""
         Invoke-StageByName $s.name
     }
-    Write-InstallReceipt "success" "none" "none"
     Write-PathReloadHint
 } catch {
-    Write-InstallReceipt "failed" $script:InstallStage (Get-StageFailureClass)
     Write-Err "$_"
     if ($script:RunAsFile) { exit 1 }
     # Under iex: report failure without closing the user's window.
     $global:LASTEXITCODE = 1
-} finally {
-    # Ctrl-C stops the run without reaching catch; finally still runs (no-op after a receipt).
-    Write-InstallReceipt "failed" $script:InstallStage "interrupted"
 }

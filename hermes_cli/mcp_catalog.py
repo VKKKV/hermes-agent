@@ -123,8 +123,7 @@ class CatalogEntry:
 class CatalogError(Exception):
     """Manifest parse/validation failure or install error.
 
-    ``failure_class`` names the raise site for the extension-install metric (a closed name from
-    ``shared_metrics_contract.EXTENSION_MCP_FAILURE_CLASSES``): manifest problems are
+    ``failure_class`` classifies local installation errors: manifest problems are
     ``config_invalid`` unless the site says otherwise.
     """
 
@@ -744,34 +743,10 @@ def card_install_config(entry: CatalogEntry) -> dict:
     return cfg
 
 
-def record_mcp_install(source: str, name: Optional[str], outcome: str, *, failure_class: Optional[str] = None,
-                       error: Optional[BaseException] = None) -> None:
-    """One shared-metrics extension install for an MCP server (catalog entry name, or None when custom).
-    A failed one names its ``failure_class`` or passes the raised ``error`` (classified by its type)."""
-    from hermes_cli.observability.shared_metrics_events import record_extension_install
-
-    record_extension_install(kind="mcp_server", source=source, name=name, outcome=outcome,
-                             failure_class=failure_class, error=error)
-
-
-@contextmanager
-def recorded_catalog_install(name: str) -> Iterator[None]:
-    """Record a first install of catalog entry *name* once: failed when the body raises, else
-    success. A reinstall over an existing ``mcp_servers`` block is not an install."""
-    fresh = not is_installed(name)
-    try:
-        yield
-    except Exception as exc:
-        if fresh:
-            record_mcp_install("catalog", name, "failed", error=exc)
-        raise
-    if fresh:
-        record_mcp_install("catalog", name, "success")
 
 
 def install_entry(entry: CatalogEntry, *, enable: bool = True, preloaded_env: Optional[dict[str, str]] = None) -> None:
-    with recorded_catalog_install(entry.name):
-        _install_entry(entry, enable=enable, preloaded_env=preloaded_env)
+    _install_entry(entry, enable=enable, preloaded_env=preloaded_env)
 
 
 def _install_entry(entry: CatalogEntry, *, enable: bool, preloaded_env: Optional[dict[str, str]]) -> None:

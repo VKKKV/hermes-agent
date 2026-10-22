@@ -35,10 +35,6 @@ def routed(monkeypatch):
     monkeypatch.setattr(m, "_has_any_provider_configured", lambda: True)
     import hermes_cli.free_tier_bootstrap as boot
     monkeypatch.setattr(boot, "run_bootstrap", lambda **k: None)
-    import hermes_cli.observability.shared_metrics_consent as consent
-    monkeypatch.setattr(consent, "offer_consent_before_chat", lambda args: None)
-    import hermes_cli.observability.shared_metrics_process as proc
-    monkeypatch.setattr(proc, "begin_process", lambda name: None)
     return m, calls
 
 

@@ -1154,9 +1154,6 @@ class HermesCLI(CLIInitMixin, CLITuiRuntimeMixin, CLIProcessNotificationsMixin, 
                 entry = (name, True)
         return entry
 
-    # Shared-metrics surface for user-typed commands; None where another process owns the count
-    # (the TUI slash worker: tui_gateway records the command it forwards).
-    _slash_metrics_surface: str | None = "cli"
 
     def process_command(self, command: str, *, redispatch: bool = False) -> bool:
         """Dispatch a slash command; returns False to exit the REPL. ``redispatch`` marks an internal
@@ -1169,9 +1166,6 @@ class HermesCLI(CLIInitMixin, CLITuiRuntimeMixin, CLIProcessNotificationsMixin, 
         _base_word = cmd_lower.split()[0].lstrip("/")
         _cmd_def = _resolve_cmd(_base_word)
         canonical = _cmd_def.name if _cmd_def else _base_word
-        if not redispatch and self._slash_metrics_surface:
-            from hermes_cli.observability.shared_metrics_events import record_slash_command
-            record_slash_command(command=canonical, surface=self._slash_metrics_surface)
 
         # A bare `/resume` prompt is one-shot: any other command disarms it so a later
         # number isn't swallowed as a stale selection.
@@ -1424,8 +1418,6 @@ class HermesCLI(CLIInitMixin, CLITuiRuntimeMixin, CLIProcessNotificationsMixin, 
         app = self._tui_build_application(layout, kb, style)
         _disable_prompt_toolkit_cpr_warning(app)
         app.after_render += self._pet_flush_kitty_frame
-        from hermes_cli.observability.shared_metrics_startup import cli_prompt_ready_handler
-        app.after_render += cli_prompt_ready_handler()
         self._app = app
 
         # Ghost status-bar lines on resize: pt's renderer scrolls the terminal after each

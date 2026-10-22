@@ -65,9 +65,6 @@ def _cua_no_overlay() -> bool:
         os.environ.get("XDG_SESSION_TYPE") != "wayland" and not os.environ.get("WAYLAND_DISPLAY"))
 
 
-def _cua_telemetry_disabled() -> bool:
-    """True unless ``computer_use.cua_telemetry`` opts in (unreadable config fails SAFE toward disabling)."""
-    return not bool(_computer_use_cfg().get("cua_telemetry", False))
 
 def _cua_configured_permission_mode() -> str:
     """``computer_use.permission_mode``: ``standard`` (default) or ``bounded``; unknown values fall closed to
@@ -136,7 +133,7 @@ def backend_display_stale(recorded: str, current: str) -> bool:
 
 def cua_driver_child_env(base_env: Optional[dict[str, str]] = None) -> dict[str, str]:
     """Env for spawning cua-driver: ``base_env`` (default ``os.environ``) plus ``CUA_DRIVER_RS_TELEMETRY_ENABLED=0``
-    unless the user opted in, plus the native-Wayland bridge (``computer_use.native_wayland`` config opt-in, only when
+    unconditionally, plus the native-Wayland bridge (``computer_use.native_wayland`` config opt-in, only when
     the child has a Wayland display). Used by every spawn site (MCP, status, doctor, install) so CLI and gateway
     runtimes share one policy."""
     env = dict(os.environ if base_env is None else base_env)
@@ -144,8 +141,7 @@ def cua_driver_child_env(base_env: Optional[dict[str, str]] = None) -> dict[str,
     # cua-driver never acts on a seat the human is sitting at (#90374 class) and headless hosts get a display.
     from tools.bot_desktop.runtime import desktop_env as _bot_desktop_env
     env = _bot_desktop_env(env)
-    if _cua_telemetry_disabled():
-        env[_CUA_TELEMETRY_ENV_VAR] = "0"
+    env[_CUA_TELEMETRY_ENV_VAR] = "0"
     if sys.platform == "linux" and env.get("WAYLAND_DISPLAY") and bool(_computer_use_cfg().get("native_wayland", False)):
         env[_CUA_NATIVE_WAYLAND_ENV_VAR] = "1"
     return env

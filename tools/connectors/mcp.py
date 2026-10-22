@@ -126,35 +126,19 @@ class _CatalogBackend:
     def start_install_oauth(self, name: str, env: dict[str, str]) -> Any:
         """Install an OAuth entry through the card's flow. The configuration is built in memory and
         lands, together with the setup values, only when ``initialize`` accepts the token."""
-        from hermes_cli.mcp_catalog import card_install_config, is_installed, record_mcp_install
+        from hermes_cli.mcp_catalog import card_install_config
         from tools.connectors import mcp_oauth
-
-        fresh = not is_installed(name)
 
         def commit() -> None:
             _save_env(env)
-            if fresh:
-                record_mcp_install("catalog", name, "success")
 
-        try:
-            entry = _catalog_entry(name)
-            _check_declared(name, entry, env)
-            return mcp_oauth.start(name, cfg=card_install_config(entry), env=env, on_commit=commit)
-        except Exception as exc:
-            # An abandoned browser authorization is a cancel, not a failed install: only a flow
-            # that cannot start is counted here.
-            if fresh:
-                record_mcp_install("catalog", name, "failed", error=exc)
-            raise
+        entry = _catalog_entry(name)
+        _check_declared(name, entry, env)
+        return mcp_oauth.start(name, cfg=card_install_config(entry), env=env, on_commit=commit)
 
     def install(self, name: str, env: dict[str, str]) -> list[str]:
-        """Probe the entry's in-memory configuration with ephemeral credentials; save both only
-        after the server answered. A failure writes nothing, so a failed reinstall keeps the
-        previous configuration. A first install is recorded once as an extension install."""
-        from hermes_cli.mcp_catalog import recorded_catalog_install
-
-        with recorded_catalog_install(name):
-            return self._install(name, env)
+        """Probe before saving configuration or credentials; failure changes neither."""
+        return self._install(name, env)
 
     def _install(self, name: str, env: dict[str, str]) -> list[str]:
         from agent.secret_scope import (

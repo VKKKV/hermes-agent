@@ -1,10 +1,7 @@
-"""Hermes gateway monitoring: service health + redacted diagnostics over OTLP.
+"""Local gateway health and redacted in-process diagnostics.
 
-``emitter`` is the in-process event bus: producers hand typed events to a
-fire-and-forget queue that never blocks or raises into gateway code, and OTLP
-subscribers consume them off the hot path. Nothing is persisted locally.
-Out of scope: trajectory capture, usage analytics, any content-bearing signal
-(those belong to the NeMo Relay integration).
+The event bus is retained for local service state and explicit subscribers.
+This fork ships no remote exporter and does not persist an upload queue.
 """
 
 from __future__ import annotations

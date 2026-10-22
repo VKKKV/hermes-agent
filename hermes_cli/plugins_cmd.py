@@ -83,8 +83,7 @@ def _resolve_git_executable() -> Optional[str]:
 class PluginOperationError(Exception):
     """Recoverable plugin install/update failure (CLI exits; HTTP maps to 4xx).
 
-    ``failure_class`` names the raise site for the extension-install metric (a closed name from
-    ``shared_metrics_contract.EXTENSION_PLUGIN_FAILURE_CLASSES``); untagged sites read ``other``.
+    ``failure_class`` classifies local installation errors; untagged sites read ``other``.
     """
 
     failure_class = "other"

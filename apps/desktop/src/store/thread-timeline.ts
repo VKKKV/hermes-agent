@@ -2,7 +2,6 @@ import { atom } from 'nanostores'
 
 import { persistBoolean, storedBoolean } from '@/lib/storage'
 
-import { recordFeatureToggle } from './desktop-metrics'
 
 const HIDE_THREAD_TIMELINE_STORAGE_KEY = 'hermes.desktop.hideThreadTimeline'
 
@@ -12,6 +11,5 @@ export const $hideThreadTimeline = atom(storedBoolean(HIDE_THREAD_TIMELINE_STORA
 $hideThreadTimeline.subscribe(value => persistBoolean(HIDE_THREAD_TIMELINE_STORAGE_KEY, value))
 
 export function setHideThreadTimeline(value: boolean) {
-  recordFeatureToggle('thread_timeline', !$hideThreadTimeline.get(), !value)
   $hideThreadTimeline.set(value)
 }

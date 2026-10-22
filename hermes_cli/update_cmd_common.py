@@ -12,7 +12,8 @@ def _record_stop(reason: str, *, without_receipt: str | None = None) -> None:
     """Name the exit about to stop this update as one closed token (see update_receipt.record_stop_reason).
 
     ``without_receipt`` (``refused``/``failed``) is for an exit that fires before the receipt
-    opens: a metrics row only. The receipt module is read from ``sys.modules``, never imported:
+    opens: no local receipt exists to update, so it does nothing. The receipt module is
+    read from ``sys.modules``, never imported:
     an older updater can load this tree after the swap while its own, older ``update_receipt``
     (without these calls) stays loaded.
     """
@@ -21,8 +22,6 @@ def _record_stop(reason: str, *, without_receipt: str | None = None) -> None:
         record = getattr(receipt, "record_stop_reason", None)
         if record is not None:
             record(reason)
-    elif (record := getattr(receipt, "record_stop_without_receipt", None)) is not None:
-        record(reason, without_receipt)
 
 
 @contextmanager

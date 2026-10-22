@@ -3086,7 +3086,7 @@ class TestRunConversation:
         coordinator = MagicMock()
         coordinator.acquire_conversation.return_value = relay_lease
         coordinator.begin_turn.return_value = relay_turn
-        start_error = RuntimeError("task metrics start failed")
+        start_error = RuntimeError("conversation loop failed")
 
         with (
             patch("agent.relay_runtime.SESSION_COORDINATOR", coordinator),
@@ -3094,21 +3094,12 @@ class TestRunConversation:
                 "agent.relay_runtime.current_profile_key",
                 return_value="/profile",
             ),
-            patch(
-                "hermes_cli.observability.relay_shared_metrics.start_task_run",
-                side_effect=start_error,
-            ),
-            patch(
-                "hermes_cli.observability.relay_shared_metrics.finish_task_run"
-            ) as finish_task_run,
-            patch("agent.conversation_loop.run_conversation") as run_conversation,
+            patch("agent.conversation_loop.run_conversation", side_effect=start_error),
         ):
             with pytest.raises(RuntimeError) as caught:
                 agent.run_conversation("hello", task_id="task-1")
 
         assert caught.value is start_error
-        run_conversation.assert_not_called()
-        finish_task_run.assert_not_called()
         coordinator.finish_logical_calls.assert_called_once_with(
             relay_turn,
             outcome="failed",
@@ -3341,13 +3332,6 @@ class TestRunConversation:
                 "agent.conversation_loop.run_conversation",
                 return_value=failed_result,
             ),
-            patch(
-                "hermes_cli.observability.relay_shared_metrics.start_task_run",
-            ),
-            patch(
-                "hermes_cli.observability.relay_shared_metrics.finish_task_run",
-                side_effect=lambda **_kwargs: order.append("metrics"),
-            ),
             patch.object(
                 relay_runtime.SESSION_COORDINATOR,
                 "finish_logical_calls",
@@ -3357,7 +3341,7 @@ class TestRunConversation:
             result = agent.run_conversation("private prompt")
 
         assert result is failed_result
-        assert order == ["logical", "metrics"]
+        assert order == ["logical"]
 
 
     def test_request_scoped_api_hooks_skip_payload_work_without_listeners(self, agent, monkeypatch):

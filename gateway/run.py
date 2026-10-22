@@ -2716,8 +2716,6 @@ def _abandon_timed_out_gateway_turn(
             request_hard_interrupt(agent, _INTERRUPT_REASON_TIMEOUT, tool_reason=_INTERRUPT_TOOL_REASON_TIMEOUT)
         except Exception:
             logger.debug("Timed-out agent interrupt failed", exc_info=True)
-        from hermes_cli.observability.shared_metrics_process import record_watchdog_turn_abort
-        record_watchdog_turn_abort(agent)
 
     try:
         _reap_gateway_turn_processes(
@@ -4665,16 +4663,6 @@ async def _shutdown_mcp_servers_nonblocking(timeout: float = 5.0, config: Any = 
     return done
 
 
-def _shutdown_gateway_health_export(runner: Any) -> None:
-    """Idempotently drain and detach Gateway Health OTLP export."""
-    runtime = getattr(runner, "_gateway_health_export_runtime", None)
-    if runtime is None:
-        return
-    runner._gateway_health_export_runtime = None
-    try:
-        runtime.shutdown()
-    except Exception:
-        logger.debug("gateway health OTLP export shutdown failed", exc_info=True)
 
 
 def _gateway_stderr_formatter() -> logging.Formatter:
@@ -5223,10 +5211,6 @@ def _exit_after_graceful_shutdown(exit_code: int) -> None:
         release_gateway_runtime_lock()
 
     def _mark_exited() -> None:
-        # Single funnel every graceful exit passes through, so the next boot's unclean-death detector
-        # fires only for genuine SIGKILL/OOM/VM deaths. Ownership-guarded against an old --replace life.
-        from hermes_cli.observability.shared_metrics_process import stamp_exit
-        stamp_exit("clean")  # the exit-metrics marker too: os._exit skips its atexit stamp (never raises)
         from gateway.lifecycle_ledger import mark_exited
         mark_exited(exit_code, reason="graceful_shutdown")
 

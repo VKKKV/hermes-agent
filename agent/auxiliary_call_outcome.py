@@ -1,7 +1,7 @@
 """How one auxiliary logical call ended, for its Relay ``hermes.logical_llm_call`` scope.
 
-The scope's ``outcome`` + ``error_class`` become the shared-metrics ``model_route`` row of an
-auxiliary call, under the same contract as a primary call: a failure carries the classifier's
+The scope's local ``outcome`` + ``error_class`` follow the same execution contract
+as a primary call: a failure carries the classifier's
 ``FailoverReason`` for the error that ended it, a Hermes-side abort (``/stop``, Ctrl+C, an
 interrupt, shutdown) is ``cancelled`` rather than ``failed``, and a success keeps the last
 attempt error it recovered from (a retried timeout, a fallback past a 429).
@@ -46,7 +46,7 @@ def is_cancellation(error: BaseException) -> bool:
 
 def error_class(error: BaseException, *, provider: str = "", model: str = "") -> str:
     """The classifier's reason for one aux attempt error; ``unknown`` when it cannot say.
-    Never raises: telemetry must not replace the caller's exception."""
+    Never raises: diagnostics must not replace the caller's exception."""
     if not isinstance(error, Exception):
         return "unknown"
     try:

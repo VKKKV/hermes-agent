@@ -12,7 +12,6 @@ import { zhModelSettings } from './zh_model_settings'
 import { zhNotices } from './zh_notices'
 import { zhOnboarding } from './zh_onboarding'
 import { zhProjects } from './zh_projects'
-import { zhSharedMetrics } from './zh_shared_metrics'
 import { zhThemePicker } from './zh_theme_picker'
 import { zhUpdateChannel } from './zh_update_channel'
 
@@ -25,7 +24,6 @@ export const zhOverrides = {
     copyUrl: '复制链接',
     close: '关闭'
   },
-  sharedMetrics: zhSharedMetrics,
   firstRun: zhFirstRun,
   intro: introZh,
   connectors: zhConnectorCard,

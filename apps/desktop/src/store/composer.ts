@@ -4,7 +4,6 @@ import { deriveDraftTitle } from '@/lib/draft-title'
 import { triggerHaptic } from '@/lib/haptics'
 import { persistString, storedString } from '@/lib/storage'
 
-import { recordDislike, recordFriction } from './desktop-metrics'
 
 /** Release blob: chip previews created for OS image drops (see #63682). */
 export function revokeAttachmentPreviewUrl(url?: string | null) {
@@ -654,7 +653,6 @@ export function adoptGoneSessionDraft(): boolean {
 }
 
 export function dismissRestoredDraftNotice(): void {
-  recordFriction('notice_dismissed', 'restored_draft')
   $restoredDraftNotice.set(null)
 }
 
@@ -676,7 +674,6 @@ export function undoRestoredDraft(liveText: string): boolean {
   const current = draftsBySession.get(freshDraftScope())
   stashSessionDraft(notice.fromKey, notice.text, current?.attachments ?? [])
   clearSessionDraft(null)
-  recordDislike('undo', 'restored_draft')
 
   return true
 }

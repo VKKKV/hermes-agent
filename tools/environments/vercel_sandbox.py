@@ -41,9 +41,9 @@ _RUNNING_WAIT_TIMEOUT = timedelta(seconds=30)
 
 def _ensure_vercel_sdk() -> None:
     """Lazy-install vercel SDK on demand. Idempotent."""
-    # The SDK (>=0.7) ships default-on telemetry; Hermes policy is opt-in only, so disable it
-    # before the SDK is imported. setdefault: an explicit user value is never overridden.
-    os.environ.setdefault("VERCEL_TELEMETRY_DISABLED", "1")
+    # The SDK (>=0.7) ships default-on telemetry; this fork forces it off
+    # before the SDK is imported, even if an inherited variable requests telemetry.
+    os.environ["VERCEL_TELEMETRY_DISABLED"] = "1"
     try:
         from pm import ensure_import as _lazy_ensure
     except ImportError:

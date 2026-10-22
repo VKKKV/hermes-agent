@@ -206,10 +206,9 @@ dependencies = [
   # Hence the ``sys_platform == 'win32'`` marker: the dep (and its portalocker
   # / pywin32 tree) ships only where it's actually used.
   "concurrent-log-handler==0.9.29; sys_platform == 'win32' and python_version >= '3.14'",
-  # First-party lifecycle and shared-metrics runtime. Relay 0.10 is the supported
-  # native runtime and provider-codec baseline. Managed calls pass request and
-  # response data through this native module in-process; shared metrics installs
-  # no network exporter and consumes only its bounded projection. This marker
+  # Relay 0.10 is the native execution-scope and provider-codec baseline.
+  # Managed calls pass request and response data through this module in-process;
+  # this fork installs no built-in metrics observer or remote exporter. This marker
   # must stay false anywhere no compatible native wheel tag can match; otherwise
   # installing Python dependencies fails instead of falling back to the no-op
   # Relay host (#76469, Termux).
@@ -429,14 +428,6 @@ acp = ["agent-client-protocol==0.9.0"]
 # NOT re-added to [all] so a future quarantined release can't break fresh
 # installs (see [all] policy comment below).
 mistral = ["mistralai==2.4.8"]
-# OTLP gateway monitoring export (optional). Provides the OpenTelemetry SDK +
-# OTLP/HTTP exporter for monitoring.gateway_health_export. Lazy-installed via
-# PM on first use; never a core dependency and deliberately
-# NOT in [all].
-otlp = [
-  "opentelemetry-sdk==1.39.1",
-  "opentelemetry-exporter-otlp-proto-http==1.39.1",
-]
 bedrock = ["boto3==1.42.89"]
 vertex = ["google-auth==2.55.1"]
 azure-identity = ["azure-identity==1.25.3"]

@@ -148,41 +148,16 @@ def _dict_or_empty(value) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+
+
 def cmd_monitoring(args):
-    """Gateway monitoring status: health & diagnostics export posture."""
-    from hermes_cli.config import load_config
-    action = getattr(args, "monitoring_action", None) or "status"
-    mon = _dict_or_empty(load_config().get("monitoring"))
+    """Read local service state only; legacy export config is never consulted."""
+    from gateway.status import read_runtime_status
 
-    if action == "status":
-        from agent.monitoring import otlp_exporter
-        gh = _dict_or_empty(mon.get("gateway_health_export"))
-        otlp = _dict_or_empty(_dict_or_empty(mon.get("export")).get("otlp"))
-
-        print("Gateway monitoring")
-        print(f"  Health export:  {'enabled' if gh.get('enabled') else 'disabled'} "
-              f"(monitoring.gateway_health_export.enabled)")
-        if gh.get("enabled"):
-            print(f"    Metrics:            {'on' if gh.get('metrics_enabled', True) else 'off'} "
-                  f"(interval {gh.get('export_interval_seconds', 60)}s)")
-            print(f"    Diagnostic events:  {'on' if gh.get('diagnostic_events_enabled', True) else 'off'}")
-            print(f"    Warning/error logs: {'on' if gh.get('warning_error_events_enabled', True) else 'off'} "
-                  f"(interval {gh.get('logs_export_interval_seconds', 5)}s)")
-            print("    Content safety:     always on "
-                  "(rendered messages are never exported; not configurable)")
-        endpoint = otlp.get("endpoint") or ""
-        if otlp.get("enabled") and endpoint:
-            print(f"  OTLP endpoint:  {endpoint}")
-        else:
-            print("  OTLP endpoint:  not configured (monitoring.export.otlp)")
-        print(f"  OTel SDK:       {'installed' if otlp_exporter.is_available() else 'not installed'} "
-              f"(optional extra: hermes-agent[otlp])")
-        print("\n  Scope: gateway service health + redacted diagnostics only.")
-        print("  No prompts, messages, tool args/results, usage analytics, or traces.")
-        return
-
-    print(f"Unknown monitoring action: {action}", file=sys.stderr)
-    sys.exit(2)
+    status = read_runtime_status() or {}
+    print("Gateway monitoring (local only)")
+    print("  Remote telemetry/export: removed from this fork")
+    print(f"  State: {status.get('gateway_state', 'unknown')}")
 
 
 def cmd_skills(args):

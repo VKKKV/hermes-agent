@@ -1,6 +1,6 @@
 """``hermes photon ...`` CLI subcommands (registered via ``ctx.register_cli_command()``):
 setup (device login + project + user + sidecar), status, install-sidecar (npm install in
-the sidecar dir), telemetry [on|off]. Device login is the first step of ``setup`` (no
+the sidecar dir). Device login is the first step of ``setup`` (no
 standalone ``login`` verb); inbound is the gRPC stream, so there are no webhook subcommands.
 """
 from __future__ import annotations
@@ -36,10 +36,6 @@ def register_cli(parser: argparse.ArgumentParser) -> None:
                          help="Skip `npm install` inside the sidecar directory")
     subs.add_parser("status", help="Show login + project + sidecar dep state")
     subs.add_parser("install-sidecar", help="Run npm install inside the sidecar directory")
-    p_telemetry = subs.add_parser("telemetry", help="Show or toggle Spectrum SDK telemetry (on/off)")
-    p_telemetry.add_argument(
-        "state", nargs="?", choices=("on", "off"),
-        help="Turn telemetry on or off (omit to show the current state)")
     parser.set_defaults(func=dispatch)
 
 
@@ -258,34 +254,7 @@ def _cmd_status(_args: argparse.Namespace) -> int:
     node_bin = find_node_executable("node")
     print(f"  node binary         : {node_bin or '✗ missing (install Node 18+)'}")
     print(f"  sidecar deps        : {'✓ installed' if sidecar_deps_installed() else '✗ run `hermes photon install-sidecar`'}")
-    print(f"  telemetry           : {'on' if _telemetry_enabled() else 'off'} (`hermes photon telemetry on|off`)")
-    return 0
-
-
-def _telemetry_enabled() -> bool:
-    """PHOTON_TELEMETRY from env / ~/.hermes/.env; truthy set mirrors the sidecar's."""
-    try:
-        from hermes_cli.config import get_env_value
-        raw = get_env_value("PHOTON_TELEMETRY")
-    except ImportError:
-        raw = os.getenv("PHOTON_TELEMETRY")
-    return (raw or "").strip().lower() in ("1", "true", "yes", "on")
-
-
-def _cmd_telemetry(args: argparse.Namespace) -> int:
-    state = getattr(args, "state", None)
-    if state is None:
-        print(f"Photon telemetry: {'on' if _telemetry_enabled() else 'off'}")
-        print("  Toggle with `hermes photon telemetry on` / `hermes photon telemetry off`.")
-        return 0
-    try:
-        from hermes_cli.config import save_env_value
-        save_env_value("PHOTON_TELEMETRY", "true" if state == "on" else "false")
-    except Exception as e:
-        print(f"could not save PHOTON_TELEMETRY: {e}", file=sys.stderr)
-        return 1
-    print(f"✓ Spectrum telemetry turned {state} (PHOTON_TELEMETRY in ~/.hermes/.env)")
-    print("  Restart the gateway for the sidecar to pick it up:  hermes gateway restart")
+    print("  telemetry           : disabled by this fork")
     return 0
 
 
@@ -333,8 +302,7 @@ def _install_sidecar() -> int:
 
 
 _COMMANDS = {
-    "setup": _cmd_setup, "status": _cmd_status, "install-sidecar": lambda _args: _install_sidecar(),
-    "telemetry": _cmd_telemetry}
+    "setup": _cmd_setup, "status": _cmd_status, "install-sidecar": lambda _args: _install_sidecar()}
 
 
 def gateway_setup() -> None:

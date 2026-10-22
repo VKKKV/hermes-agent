@@ -3,7 +3,6 @@ import { atom } from 'nanostores'
 import { chatSurfaceRoot } from '@/app/chat/surface-vars'
 import { persistBoolean, persistString, storedBoolean, storedString } from '@/lib/storage'
 
-import { recordFeatureToggle } from './desktop-metrics'
 
 const POPOUT_STORAGE_KEY = 'hermes.desktop.composerPopout.window.v1'
 const POPOUT_GESTURES_ENABLED_STORAGE_KEY = 'hermes.desktop.composerPopout.gesturesEnabled'
@@ -105,7 +104,6 @@ export function setComposerPoppedOut(poppedOut: boolean) {
 }
 
 export function setComposerPopoutGesturesEnabled(value: boolean) {
-  recordFeatureToggle('composer_popout_gestures', $composerPopoutGesturesEnabled.get(), value)
   $composerPopoutGesturesEnabled.set(value)
   persistBoolean(POPOUT_GESTURES_ENABLED_STORAGE_KEY, value)
 

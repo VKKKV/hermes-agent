@@ -11,7 +11,6 @@ import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
 import { AlertCircle, AlertTriangle, CheckCircle2, type IconComponent, Info } from '@/lib/icons'
 import { cn } from '@/lib/utils'
-import { noticeIdForToast, recordFriction } from '@/store/desktop-metrics'
 import {
   $notifications,
   type AppNotification,
@@ -25,7 +24,6 @@ type ToneVariant = 'default' | 'destructive' | 'warning' | 'success'
 /** A user dismissal (✕, swipe, clear all) is friction, counted by the toast's code-defined id only.
  *  Timers, action buttons and programmatic clears are not dismissals and go straight to the store. */
 function noteUserDismissed(id: string) {
-  recordFriction('notice_dismissed', noticeIdForToast(id))
 }
 
 function userDismiss(id: string) {

@@ -129,7 +129,6 @@ def _run_wrapped_live_turn_to_boundary(agent, result):
 
 def _install_relay_recorder(monkeypatch, review_run=None):
     from agent import relay_runtime
-    from hermes_cli.observability import relay_shared_metrics
 
     calls = []
 
@@ -166,18 +165,6 @@ def _install_relay_recorder(monkeypatch, review_run=None):
         relay_runtime,
         "current_profile_key",
         lambda: "/test-profile",
-    )
-    monkeypatch.setattr(
-        relay_shared_metrics,
-        "start_task_run",
-        lambda **kwargs: calls.append(
-            ("start_task_run", review_acknowledged())
-        ),
-    )
-    monkeypatch.setattr(
-        relay_shared_metrics,
-        "finish_task_run",
-        lambda **kwargs: None,
     )
     return calls
 
@@ -518,7 +505,6 @@ def test_live_turn_waits_for_review_exit_before_relay_and_turn_context(monkeypat
     assert relay_calls == [
         ("acquire", True),
         ("begin", True),
-        ("start_task_run", True),
     ]
     assert boundary_reached.is_set()
     assert seen["interrupt_message"] == "superseded by a new live turn"
@@ -572,7 +558,6 @@ def test_live_turn_cancels_review_during_startup_before_provider(monkeypatch):
     assert relay_calls == [
         ("acquire", True),
         ("begin", True),
-        ("start_task_run", True),
     ]
     assert live_result == {"boundary_reached": True}
 
@@ -658,7 +643,6 @@ def test_live_turn_proceeds_when_review_acknowledgement_times_out(monkeypatch):
     assert relay_calls == [
         ("acquire", False),
         ("begin", False),
-        ("start_task_run", False),
     ]
     assert agent.session_id == "test-session"
 
@@ -699,7 +683,6 @@ def test_live_turn_interrupts_legacy_review_but_keeps_foreground_priority(monkey
     assert relay_calls == [
         ("acquire", False),
         ("begin", False),
-        ("start_task_run", False),
     ]
     assert agent.session_id == "test-session"
 

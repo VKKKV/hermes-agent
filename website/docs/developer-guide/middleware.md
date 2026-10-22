@@ -251,7 +251,7 @@ Plugin-specific examples should live with the plugin that owns the behavior.
 NeMo Relay execution middleware is installed through Relay's discovered user
 and system configuration, or through an explicit `plugins.toml` selected with
 `HERMES_NEMO_RELAY_PLUGINS_TOML`; see
-[Relay shared metrics](relay-shared-metrics.md).
+[observer hooks](observer-hooks.md). This fork ships no built-in metrics sender.
 
 ## Safety Notes
 

@@ -22,13 +22,7 @@ import {
 /** Shared metrics count each user-typed command once, from the client: the gateway no longer
  *  counts slash.exec, so locally handled commands (/resume, /skin, overlays) land too.
  *  Fire-and-forget; the backend canonicalizes the raw name. */
-export function reportSlashCommand(gw: GatewayClient, name: string, sid: null | string | undefined): void {
-  if (name) {
-    gw.request('shared_metrics.slash_command', { command: name, ...(sid ? { session_id: sid } : {}) }).catch(
-      () => undefined
-    )
-  }
-}
+
 
 // Gateways that answered `command.observe` with unknown_method (older than this TUI): not asked again.
 const observeUnsupported = new WeakSet<object>()
@@ -74,7 +68,7 @@ export function createSlashHandler(ctx: SlashHandlerContext): SlashHandler {
 
     const countTyped = () => {
       if (typed) {
-        reportSlashCommand(gw, parsed.name, sid)
+
       }
     }
 

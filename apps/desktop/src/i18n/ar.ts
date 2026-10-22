@@ -84,7 +84,6 @@ export const arOverrides = {
       signInFailed: 'تعذّر الاتصال. انقر لإعادة المحاولة'
     }
   },
-  sharedMetrics: arCommon.sharedMetrics,
   firstRun: arFirstRun,
   externalOpenFailed: arChrome.externalOpenFailed,
   sessionImport: arConnectors.sessionImport,

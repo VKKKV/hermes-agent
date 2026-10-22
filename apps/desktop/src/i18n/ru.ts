@@ -12,7 +12,6 @@ import { ruNotices } from './ru_notices'
 import { ruOnboarding } from './ru_onboarding'
 import { ruPluginSettings } from './ru_plugins'
 import { ruProjects } from './ru_projects'
-import { ruSharedMetrics } from './ru_shared_metrics'
 import { ruThemePicker } from './ru_theme_picker'
 import { ruUpdateChannel } from './ru_update_channel'
 
@@ -41,7 +40,6 @@ export const ruOverrides = {
 
   catalog: ruCatalog,
   connectors: ruConnectors.connectors,
-  sharedMetrics: ruSharedMetrics,
   firstRun: ruFirstRun,
   sessionImport: ruConnectors.sessionImport,
   common: {

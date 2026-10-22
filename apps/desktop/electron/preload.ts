@@ -674,19 +674,6 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
 
       return () => ipcRenderer.removeListener('hermes:updates:progress', listener)
     },
-    takePendingRun: () => ipcRenderer.invoke('hermes:updates:metric:take'),
-    ackPendingRun: sent => ipcRenderer.invoke('hermes:updates:metric:ack', sent),
-    onPendingRun: callback => {
-      const listener = () => callback()
-      ipcRenderer.on('hermes:updates:metric:pending', listener)
-
-      return () => ipcRenderer.removeListener('hermes:updates:metric:pending', listener)
-    }
-  },
-  desktopMetrics: {
-    setEnabled: (on, profile) => ipcRenderer.invoke('hermes:desktop-metrics:set-enabled', on, profile),
-    takeRendererCrashes: () => ipcRenderer.invoke('hermes:desktop-metrics:crash:take'),
-    ackRendererCrashes: sent => ipcRenderer.invoke('hermes:desktop-metrics:crash:ack', sent)
   },
   themes: {
     fetchMarketplace: id => ipcRenderer.invoke('hermes:vscode-theme:fetch', id),
