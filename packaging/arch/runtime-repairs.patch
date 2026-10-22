@@ -1,8 +1,8 @@
 diff --git a/agent/agent_runtime_helpers.py b/agent/agent_runtime_helpers.py
-index 36f9d4b982..53007271c5 100644
+index 36f9d4b982..9d7f5df534 100644
 --- a/agent/agent_runtime_helpers.py
 +++ b/agent/agent_runtime_helpers.py
-@@ -839,12 +839,22 @@ def _flatten_content_text(content: Any) -> str:
+@@ -839,13 +839,23 @@ def _flatten_content_text(content: Any) -> str:
  # tool-call CLOSERS only (bare/unterminated <function> is kept: a truncated streaming tail may still
  # be valuable, matching OpenClaw's asymmetry).
  _THINK_STRIP_PATTERNS = (
@@ -14,6 +14,7 @@ index 36f9d4b982..53007271c5 100644
  )
  
  
+-def strip_think_blocks(agent, content: str) -> str:
 +def strip_private_reasoning(content: Any) -> str:
 +    """Hide private thinking without erasing DSML needed by recovery classification."""
 +    content = _flatten_content_text(content) if content else ""
@@ -23,25 +24,69 @@ index 36f9d4b982..53007271c5 100644
 +    return content
 +
 +
- def strip_think_blocks(agent, content: str) -> str:
++def strip_think_blocks(agent, content: str, *, dsml_context: Optional[str] = None) -> str:
      """Remove reasoning/thinking blocks from content, returning only visible text: closed tag
      pairs, unterminated open tags at a block boundary (mirrors ``gateway/stream_consumer.py``),
+     stray orphan tags (all case-insensitive variants), and standalone tool-call XML blocks some
 @@ -853,7 +863,8 @@ def strip_think_blocks(agent, content: str) -> str:
      content = _flatten_content_text(content) if content else ""
      for pattern in _THINK_STRIP_PATTERNS if content else ():
          content = pattern.sub('', content)
 -    return content
 +    from agent.dsml import sanitize_dsml
-+    return sanitize_dsml(content)
++    return sanitize_dsml(content, context=dsml_context)
  
  
  def sync_credential_pool_entry_id(agent) -> None:
+diff --git a/agent/chat_completion_helpers.py b/agent/chat_completion_helpers.py
+index a934965401..cbabab79e3 100644
+--- a/agent/chat_completion_helpers.py
++++ b/agent/chat_completion_helpers.py
+@@ -1573,14 +1573,14 @@ def _assistant_reasoning_text(agent, assistant_message) -> Optional[str]:
+     return _sanitize_surrogates(reasoning_text) if reasoning_text else reasoning_text
+ 
+ 
+-def _assistant_content_for_storage(agent, assistant_message):
+-    # Sanitize surrogates (Kimi/GLM via Ollama emit code points that crash json.dumps),
+-    # strip inline <think> tags at the storage boundary (they leaked to platforms and
+-    # polluted titles), then redact inlined credentials before the message enters
+-    # history / state.db / gateway delivery (no-op with HERMES_REDACT_SECRETS off).
++def _assistant_content_for_storage(agent, assistant_message, *, dsml_context=None):
++    # Keep invalid Unicode, private reasoning and credentials out of history.
++    # Continuation classification needs its prefix; redaction still acts on this
++    # fragment alone (no-op with HERMES_REDACT_SECRETS off).
+     content = _sanitize_surrogates(flatten_message_text(getattr(assistant_message, "content", None)))
+     if isinstance(content, str) and content:
+-        content = agent._strip_think_blocks(content).strip()
++        kwargs = {} if dsml_context is None else {"dsml_context": dsml_context}
++        content = agent._strip_think_blocks(content, **kwargs).strip()
+         if content:
+             from agent.redact import redact_sensitive_text
+             content = redact_sensitive_text(content)
+@@ -1636,7 +1636,7 @@ def _assistant_tool_call_dict(agent, tool_call, index: int) -> dict:
+     return tc_dict
+ 
+ 
+-def build_assistant_message(agent, assistant_message, finish_reason: str) -> dict:
++def build_assistant_message(agent, assistant_message, finish_reason: str, *, dsml_context=None) -> dict:
+     """Build a normalized assistant message dict (reasoning, reasoning_details,
+     optional tool_calls) shared by the tool-call and final-response paths.
+     Textless turns are NOT padded here: ``repair_empty_non_final_messages`` is the
+@@ -1645,7 +1645,7 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
+     assistant_tool_calls = getattr(assistant_message, "tool_calls", None)
+     reasoning_text = _assistant_reasoning_text(agent, assistant_message)
+     msg = stamp_message_timestamp({"role": "assistant",
+-        "content": _assistant_content_for_storage(agent, assistant_message), "reasoning": reasoning_text,
++        "content": _assistant_content_for_storage(agent, assistant_message, dsml_context=dsml_context), "reasoning": reasoning_text,
+         "finish_reason": finish_reason})
+ 
+     raw_reasoning_content = getattr(assistant_message, "reasoning_content", None)
 diff --git a/agent/dsml.py b/agent/dsml.py
 new file mode 100644
-index 0000000000..a20efaac51
+index 0000000000..821a9831a1
 --- /dev/null
 +++ b/agent/dsml.py
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,94 @@
 +"""Recognize unexecuted DSML, never parse it into executable tool calls.
 +
 +Only Markdown code is a protocol example. Outside code, even an inline or cut-off
@@ -51,6 +96,7 @@ index 0000000000..a20efaac51
 +"""
 +from __future__ import annotations
 +
++from functools import lru_cache
 +import re
 +
 +_PIPE = r"[|\uFF5C]{1,2}[ \t]*"
@@ -58,94 +104,83 @@ index 0000000000..a20efaac51
 +    rf"</?{_PIPE}DSML{_PIPE}(?:calls|tool_calls|function_calls|invoke|parameter)(?=[\s>]|\Z)",
 +    re.IGNORECASE,
 +)
-+_FENCE = re.compile(r" {0,3}(`{3,}|~{3,})([^\r\n]*)")
-+_TICKS = re.compile(r"`+")
 +
 +
-+def _inline_code_spans(text: str, start: int, end: int):
-+    """Pair equal-length backtick runs in linear time, including unmatched runs."""
-+    runs = list(_TICKS.finditer(text, start, end))
-+    next_run: dict[int, int] = {}
-+    partners: list[int | None] = [None] * len(runs)
-+    for index in range(len(runs) - 1, -1, -1):
-+        size = runs[index].end() - runs[index].start()
-+        partners[index] = next_run.get(size)
-+        next_run[size] = index
-+    index = 0
-+    while index < len(runs):
-+        partner = partners[index]
-+        if partner is None:
-+            index += 1
-+        else:
-+            yield runs[index].start(), runs[partner].end()
-+            index = partner + 1
++@lru_cache(maxsize=1)
++def _markdown_parser():
++    # Already shipped by Rich. Use its block/container and backtick rules rather
++    # than pairing ticks across unrelated paragraphs or guessing list indentation.
++    from markdown_it import MarkdownIt
 +
-+
-+def _code_spans(text: str):
-+    """Ordered Markdown code spans; unclosed fences remain literal code examples."""
-+    fence_start = None
-+    fence_char = ""
-+    fence_size = 0
-+    indented_start = None
-+    previous_blank = True
-+    prose_start = 0
-+    offset = 0
-+    for line in text.splitlines(keepends=True):
-+        blank = not line.strip()
-+        indented = line.expandtabs(4).startswith("    ")
-+        if fence_start is None:
-+            if indented_start is not None and not (blank or indented):
-+                yield indented_start, offset
-+                indented_start = None
-+                prose_start = offset
-+            if indented_start is not None or (indented and not blank and previous_blank):
-+                if indented_start is None:
-+                    yield from _inline_code_spans(text, prose_start, offset)
-+                    indented_start = offset
-+                offset += len(line)
-+                previous_blank = blank
-+                continue
-+        match = _FENCE.match(line)
-+        if match and fence_start is None:
-+            marker, info = match.groups()
-+            if marker[0] == "`" and "`" in info:
-+                offset += len(line)
-+                continue
-+            yield from _inline_code_spans(text, prose_start, offset)
-+            fence_start, fence_char, fence_size = offset, marker[0], len(marker)
-+        elif match and fence_start is not None:
-+            marker, info = match.groups()
-+            if marker[0] == fence_char and len(marker) >= fence_size and not info.strip():
-+                yield fence_start, offset + len(line)
-+                fence_start = None
-+                prose_start = offset + len(line)
-+        offset += len(line)
-+        previous_blank = blank
-+    if fence_start is not None:
-+        yield fence_start, len(text)
-+    elif indented_start is not None:
-+        yield indented_start, len(text)
-+    else:
-+        yield from _inline_code_spans(text, prose_start, len(text))
++    parser = MarkdownIt('commonmark').disable('reference')
++    # All non-code bytes must remain searchable, including link destinations,
++    # raw HTML and escaped punctuation. Only actual backticks exempt inline text.
++    parser.inline.ruler.enableOnly(['text', 'newline', 'backticks', 'escape'])
++    return parser
 +
 +
 +def has_unexecuted_dsml(text: str) -> bool:
-+    """Whether visible text contains protocol outside Markdown code (O(n))."""
++    """Whether visible text contains protocol outside actual Markdown code."""
 +    if not text or not _TOKEN.search(text):
 +        return False
-+    spans = iter(_code_spans(text))
-+    code_start, code_end = next(spans, (len(text), len(text)))
-+    for token in _TOKEN.finditer(text):
-+        while code_end <= token.start():
-+            code_start, code_end = next(spans, (len(text), len(text)))
-+        if not code_start <= token.start() < code_end:
++    seen = 0
++    for block in _markdown_parser().parse(text):
++        seen += len(_TOKEN.findall(block.content))
++        if block.type in ('fence', 'code_block'):
++            # Fence info is not code content (and a backtick in backtick-fence
++            # info invalidates the opener, which the parser already handles).
++            if _TOKEN.search(block.info):
++                return True
++        elif block.type == 'inline':
++            if any(_TOKEN.search(child.content) for child in block.children or ()
++                   if child.type != 'code_inline'):
++                return True
++        elif _TOKEN.search(block.content):
 +            return True
-+    return False
++    # markdown-it intentionally drops blocks past maxNesting. Unseen protocol
++    # must fail closed, not inherit a code exemption the parser never proved.
++    return seen != len(_TOKEN.findall(text))
 +
 +
-+def sanitize_dsml(text: str) -> str:
++def sanitize_dsml(text: str, *, context: str | None = None) -> str:
 +    """Never salvage narration or unknown argument tails from an unexecuted attempt."""
-+    return "" if has_unexecuted_dsml(text) else text
++    if context is None:
++        return "" if has_unexecuted_dsml(text) else text
++    from agent.agent_runtime_helpers import strip_private_reasoning
++
++    # Classify a continuation in context, but return only its scrubbed fragment.
++    return "" if has_unexecuted_dsml(strip_private_reasoning(context)) else text
++
++
++def filter_final_sources(agent, message, promoted, parts):
++    """Filter only eligible sources; preserve precedence and joined code context."""
++    from agent.agent_runtime_helpers import strip_private_reasoning
++    from agent.conversation_loop import _join_truncated_parts
++
++    def joined(candidate):
++        return strip_private_reasoning(_join_truncated_parts([*parts, (candidate, False)]))
++
++    candidate = strip_private_reasoning(promoted or message.content or "")
++    content = joined(candidate) if candidate.strip() else ""
++    leaked = has_unexecuted_dsml(content)
++    if leaked:
++        # Never salvage arguments or stale caches from a real current attempt.
++        message.content = ""
++        promoted, content = None, ""
++        agent._current_streamed_assistant_text = ""
++        agent._last_content_with_tools = None
++        agent._last_content_tools_all_housekeeping = False
++    elif not parts and not agent._has_content_after_think_block(candidate):
++        stream = getattr(agent, "_current_streamed_assistant_text", "") or ""
++        if has_unexecuted_dsml(joined(stream)):
++            agent._current_streamed_assistant_text = ""
++            stream = ""
++        if (not agent._has_content_after_think_block(stream)
++                and getattr(agent, "_last_content_tools_all_housekeeping", False)
++                and has_unexecuted_dsml(joined(getattr(agent, "_last_content_with_tools", "") or ""))):
++            agent._last_content_with_tools = None
++            agent._last_content_tools_all_housekeeping = False
++    return promoted, content, leaked
 diff --git a/agent/repetition_guard.py b/agent/repetition_guard.py
 index a2df72c9c3..0a6b392724 100644
 --- a/agent/repetition_guard.py
@@ -191,68 +226,169 @@ index a2df72c9c3..0a6b392724 100644
  
  
 diff --git a/agent/turn_final_response.py b/agent/turn_final_response.py
-index 8b0c9b1493..0c55efdc2c 100644
+index 8b0c9b1493..ec311fc0ab 100644
 --- a/agent/turn_final_response.py
 +++ b/agent/turn_final_response.py
-@@ -85,6 +85,30 @@ def finish_text_response(
+@@ -68,7 +68,6 @@ def finish_text_response(
+     stop gates accept it."""
+     from agent.conversation_loop import (
+         _CODEX_ACK_CONTINUATION_NUDGE, _DEGENERATE_FINAL_NUDGE, _DROPPED_TOOLCALL_NUDGE_CONTENT,
+-        _join_truncated_parts
+     )
+ 
+     def _verdict(action: str, result: Optional[dict[str, Any]] = None) -> FinalResponseVerdict:
+@@ -85,18 +84,8 @@ def finish_text_response(
              result=result,
          )
  
-+    # A leaked tool attempt must retry, not complete or recover from a cache.
-+    from agent.agent_runtime_helpers import strip_private_reasoning
-+    from agent.dsml import has_unexecuted_dsml
-+    _visible_content = strip_private_reasoning(assistant_message.content or "")
-+    _dsml_candidates = [_visible_content]
-+    if not _visible_content.strip():
-+        # Only consult alternate sources when they could become the answer;
-+        # private reasoning or a stale cache must not discard a valid reply.
-+        _dsml_candidates.extend((
-+            agent._extract_reasoning(assistant_message),
-+            getattr(agent, "_current_streamed_assistant_text", ""),
-+            getattr(agent, "_last_content_with_tools", ""),
-+        ))
-+    _dsml_leaked = not assistant_message.tool_calls and any(
-+        isinstance(candidate, str) and has_unexecuted_dsml(strip_private_reasoning(candidate))
-+        for candidate in _dsml_candidates
+-    # Reasoning-only clean stop on a trusted route (elsewhere reasoning is private and takes the
+-    # ladder): some parsers (vLLM nemotron_v3 past ~500K prompt tokens) file the whole answer as
+-    # reasoning when the closing delimiter is missing; ``stop`` means generation is complete, so
+-    # promote it BEFORE the ladder. ``length`` (cut off mid-thought) stays on the continuation path.
+-    # The promoted text is RETURNED as the answer but never written into the assistant
+-    # row's ``content``: chain-of-thought stored as ordinary content is indistinguishable
+-    # from a real reply on every history surface (#111761). The row keeps ``content``
+-    # empty with the text in its reasoning fields and carries the promoted text as the
+-    # ``api_content`` sidecar, so the next turn still replays it byte-identically.
+-    # Anthropic thinking (signed ``thinking`` block, or a plugin's ``*.native_assistant`` carrier
+-    # of native Claude turns) is a summary written by a separate model, never the answer: it
+-    # takes the empty-response continuation below instead.
++    # Promotion eligibility is also the DSML candidate boundary. Private reasoning
++    # on any other route must not invalidate a clean stream/housekeeping answer.
+     _content = assistant_message.content
+     _promoted = None
+     if (
+@@ -113,22 +102,30 @@ def finish_text_response(
+         and answer_in_reasoning_capability(agent)
+     ):
+         _promoted = agent._extract_reasoning(assistant_message) or None
+-        if _promoted:
+-            # WARNING, not INFO: a model that keeps ending turns this way is stalled
+-            # (planning monologue, zero tool calls) while the turn reports "complete".
+-            logger.warning(
+-                "Reasoning-only clean stop (%d chars) — returning the reasoning as the final "
+-                "response (model=%s provider=%s api_calls=%d tool_turns=%d)",
+-                len(_promoted), agent.model, agent.provider, api_call_count,
+-                sum(1 for m in messages if isinstance(m, dict) and m.get("role") == "assistant" and m.get("tool_calls")),
+-            )
++
++    from agent.dsml import filter_final_sources
++    _promoted, _joined_response, _dsml_leaked = filter_final_sources(
++        agent, assistant_message, _promoted, truncated_response_parts,
 +    )
 +    if _dsml_leaked:
 +        logger.warning("Unparsed DSML tool attempt: entering empty-response recovery")
-+        assistant_message.content = ""
-+        agent._current_streamed_assistant_text = ""
-+        agent._last_content_with_tools = None
-+        agent._last_content_tools_all_housekeeping = False
 +
-     # Reasoning-only clean stop on a trusted route (elsewhere reasoning is private and takes the
-     # ladder): some parsers (vLLM nemotron_v3 past ~500K prompt tokens) file the whole answer as
-     # reasoning when the closing delimiter is missing; ``stop`` means generation is complete, so
-@@ -101,6 +125,7 @@ def finish_text_response(
-     _promoted = None
-     if (
-         finish_reason == "stop"
-+        and not _dsml_leaked
-         and not assistant_message.tool_calls
-         and (_content is None or (isinstance(_content, str) and not _content.strip()))
-         and not any(
++    if _promoted:
++        # Only a trusted parser route may return reasoning. Keep it out of the
++        # durable row's content and replay through api_content (#111761).
++        logger.warning(
++            "Reasoning-only clean stop (%d chars) — returning the reasoning as the final "
++            "response (model=%s provider=%s api_calls=%d tool_turns=%d)",
++            len(_promoted), agent.model, agent.provider, api_call_count,
++            sum(1 for m in messages if isinstance(m, dict) and m.get("role") == "assistant" and m.get("tool_calls")),
++        )
+     final_response = _promoted or assistant_message.content or ""
+     # Unmute: _mute_post_response from a housekeeping tool turn must not silence
+     # empty-response warnings on the final response path.
+     agent._mute_post_response = False
+ 
+     # Think-block-only / empty content: recovery path.
+-    if not agent._has_content_after_think_block(final_response):
++    if _dsml_leaked or not agent._has_content_after_think_block(_joined_response):
+         _ev = recover_empty_response(
+             agent, assistant_message, response, finish_reason, final_response=final_response,
+             messages=messages, api_messages=api_messages, conversation_history=conversation_history,
+@@ -169,6 +166,7 @@ def finish_text_response(
+         tool_results_this_turn, trailing_continue_intent,
+     )
+ 
++    _message_kwargs = {"dsml_context": _joined_response} if truncated_response_parts else {}
+     _ack_mode = intent_ack_continuation_mode(agent)
+     # Said-continue-but-stopped guard: no tool calls but the short reply TAILS with an
+     # announced next action. Reuses the SAME bounded continuation counter (max 2 per turn).
+@@ -176,7 +174,7 @@ def finish_text_response(
+     # and zero tool calls, chain-of-thought ending on "Let me batch the terminal calls..." is a
+     # stalled model, and returning it as the answer aborts the tool loop while reporting
+     # "complete" (#111761). Same cap, so a model that never acts still ends after 2 nudges.
+-    _stall_text = agent._strip_think_blocks(final_response or "")
++    _stall_text = agent._strip_think_blocks(_joined_response)
+     _stall_continue_intent = (
+         bool(getattr(agent, "_stall_guards", True))
+         and agent.valid_tool_names
+@@ -228,7 +226,7 @@ def finish_text_response(
+                 codex_ack_continuations + 1,
+             )
+         codex_ack_continuations += 1
+-        interim_msg = agent._build_assistant_message(assistant_message, "incomplete")
++        interim_msg = agent._build_assistant_message(assistant_message, "incomplete", **_message_kwargs)
+         if _promoted:
+             # Same sidecar as the final row: the wire copy must carry the promoted text, not only
+             # ``reasoning_content``, or the continuation replays an empty assistant turn.
+@@ -251,7 +249,7 @@ def finish_text_response(
+     codex_ack_continuations = 0
+ 
+     if truncated_response_parts:
+-        final_response = _join_truncated_parts([*truncated_response_parts, (final_response, False)])
++        final_response = _joined_response
+         truncated_response_parts = []
+         length_continue_retries = 0
+         # The continuation recovered, so the fragments stay in the transcript.
+@@ -280,7 +278,7 @@ def finish_text_response(
+             partial_result(messages, api_call_count, user_response, error), "truncated", True,
+         ))
+ 
+-    final_msg = agent._build_assistant_message(assistant_message, finish_reason)
++    final_msg = agent._build_assistant_message(assistant_message, finish_reason, **_message_kwargs)
+     if _promoted:
+         # Replay sidecar only: ``content`` stays empty so the row is never mistaken for a
+         # real reply; ``build_api_messages`` substitutes ``api_content`` on the wire.
 diff --git a/agent/turn_truncation.py b/agent/turn_truncation.py
-index 190bff1fcc..ade6cfa7b1 100644
+index 190bff1fcc..3c0bd1185a 100644
 --- a/agent/turn_truncation.py
 +++ b/agent/turn_truncation.py
-@@ -314,6 +314,15 @@ def _continue_text(st: _Trunc, _retry: TurnRetryState, assistant_message: Any) -
+@@ -254,6 +254,8 @@ def _abort_reason(agent: Any, content: Any, has_tool_calls: bool) -> Optional[tu
+     burned the budget on one fragment (reasoning stripped first)."""
+     if has_tool_calls:
+         return None
++    from agent.message_content import flatten_message_text
++    content = flatten_message_text(content)
+     if content and _THINK_TAG_RE.search(content) and not agent._has_content_after_think_block(content):
+         return _THINKING_EXHAUSTED
+     visible = agent._strip_think_blocks(content) if isinstance(content, str) else content
+@@ -314,11 +316,31 @@ def _continue_text(st: _Trunc, _retry: TurnRetryState, assistant_message: Any) -
      st.length_continue_retries += 1
      n = st.length_continue_retries
      _interim_content = getattr(assistant_message, "content", None)
 +    from agent.agent_runtime_helpers import strip_private_reasoning
 +    from agent.dsml import has_unexecuted_dsml
-+    if isinstance(_interim_content, str) and has_unexecuted_dsml(strip_private_reasoning(_interim_content)):
-+        # An unexecuted tool serialization is not a recoverable answer fragment.
-+        # Keep the existing bounded length retry, but never stitch/replay its body.
-+        _interim_content = None
++    _interim_content = strip_private_reasoning(_interim_content)
++    _joined_content = _join_truncated_parts([*st.truncated_response_parts, (_interim_content, st.is_stub)])
++    if has_unexecuted_dsml(strip_private_reasoning(_joined_content)):
++        # Fail closed, rather than asking to continue an envelope whose unknown
++        # argument tail no longer contains a recognizable DSML token. No hidden
++        # cross-turn rejection state or provider-generated sentinel is needed.
 +        agent._current_streamed_assistant_text = ""
 +        agent._last_content_with_tools = None
 +        agent._last_content_tools_all_housekeeping = False
++        collapse_continuation_trail(agent, messages, st.current_turn_user_idx, finish_reason="length", parts=[])
++        st.truncated_response_parts = []
++        return st.end_turn(
++            "The model returned an unparsed tool call, so this turn did not complete. "
++            "Its text was discarded without execution. Retry your request or switch models.",
++            "Unexecuted DSML in a truncated response", failure=("invalid_response", True),
++        )
      if not _interim_content and not st.is_stub:
          # Thinking-only truncation: continuing with thinking ON re-burns the budget.
          agent._ephemeral_reasoning_off = True
+     if _interim_content:
+-        interim_msg = agent._build_assistant_message(assistant_message, st.finish_reason)
++        interim_msg = agent._build_assistant_message(
++            assistant_message, st.finish_reason, dsml_context=_joined_content,
++        )
+         interim_msg["_length_continuation_fragment"] = True  # ceiling exit drops these
+         append_message(messages, interim_msg)
+         st.truncated_response_parts.append((_interim_content, st.is_stub))
 diff --git a/hermes_cli/cli_render.py b/hermes_cli/cli_render.py
 index f52ab7c294..971c179f31 100644
 --- a/hermes_cli/cli_render.py

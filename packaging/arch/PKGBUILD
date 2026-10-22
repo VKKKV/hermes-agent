@@ -4,7 +4,7 @@ pkgname=hermes-agent
 _commit=4d04303818b61bf3aa09278af48356315515965b
 _commit_date=1792599405
 pkgver=0.22.4
-pkgrel=1
+pkgrel=4
 pkgdesc="Locally-run AI agent with tool use, web browsing, and automation"
 arch=('x86_64')
 url="https://github.com/VKKKV/hermes-agent"
@@ -31,12 +31,22 @@ source=(
     'system-tools.py'
     'posix-log-rotation.patch'
     'runtime-repairs.patch'
+    'stable-backports.patch'
+    'no-telemetry.patch'
+    'no-telemetry-surfaces.patch'
+    'no-telemetry-files.txt'
+    'new-session-model.patch'
 )
 sha256sums=('SKIP'
             '516bee4492e4d6f6e4310703bdec7e88229a1b0ddb828542f297d4e6e226c427'
             '5950d73a49526767dfac20084d8c5597b7ebf5c16e7bff99e31dc4d7fe0d139d'
             '7bc4008a4562517f2da3341394dc9781f52a920f2b9968f9b8a3ba184b25e0a1'
-            '6295deff939e050b0650095b1d04124395e587761043ffab29842d4472299f05')
+            'bd3c6949e6adbddc673d19f538e1dd61f0f7e5e553ecfd4c9723e2414eec6762'
+            'f8cf19256d16ebfb271208a71342cfdef7ca629f40e629987da98b4eac4d83e2'
+            'c0a89026b49727d7879b20ee24ab9643888ef90386ba0e4cf5eab7d68d513977'
+            'd96e57d3f649988567faa117b320830120ae633c9bd017bf13f046e166649228'
+            '71329cf35ec75c686819f0875d81dc68c409acc943bd6275648cea1c9ff34a06'
+            'a9d824f93b910a1f44b76045609441acdc9e9ba87448e2887cd66b65608b13ea')
 
 prepare() {
   cd "${pkgname}"
@@ -44,6 +54,16 @@ prepare() {
   patch --batch --fuzz=0 -Np1 -i "${srcdir}/keep-venv-interpreter.patch"
   patch --batch --fuzz=0 -Np1 -i "${srcdir}/posix-log-rotation.patch"
   patch --batch --fuzz=0 -Np1 -i "${srcdir}/runtime-repairs.patch"
+  patch --batch --fuzz=0 -Np1 -i "${srcdir}/stable-backports.patch"
+  patch --batch --fuzz=0 -Np1 -i "${srcdir}/no-telemetry.patch"
+  patch --batch --fuzz=0 -Np1 -i "${srcdir}/no-telemetry-surfaces.patch"
+  patch --batch --fuzz=0 -Np1 -i "${srcdir}/new-session-model.patch"
+  while IFS= read -r _path; do
+    [[ "$_path" != /* && "$_path" != *..* && "$_path" != .git/* && -f "$_path" && ! -L "$_path" ]] || return 1
+  done < "${srcdir}/no-telemetry-files.txt"
+  while IFS= read -r _path; do
+    rm -- "$_path" || return 1
+  done < "${srcdir}/no-telemetry-files.txt"
 }
 
 build() {
@@ -135,8 +155,8 @@ package() {
   "updateMechanism": "external",
   "runtimeDir": "${_runtime_dir}",
   "baseVersion": "${pkgver}",
-  "displayVersion": "${pkgver}+kita.dsml",
-  "localPatches": ["posix-log-rotation", "runtime-repairs"],
+  "displayVersion": "${pkgver}+kita.privacy",
+  "localPatches": ["posix-log-rotation", "runtime-repairs", "stable-backports", "no-telemetry", "new-session-model"],
   "distance": 0,
   "payload": "bootstrap",
   "tag": null

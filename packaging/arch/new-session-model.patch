@@ -1,0 +1,430 @@
+diff --git a/hermes_cli/cli_session_mixin.py b/hermes_cli/cli_session_mixin.py
+--- a/hermes_cli/cli_session_mixin.py
++++ b/hermes_cli/cli_session_mixin.py
+@@ -57,58 +57,6 @@
+         print(msg, file=sys.stderr)
+     else:
+         cli._console_print(f"[dim]{_escape(msg)}[/dim]")
+-
+-
+-def _reset_model_to_config_default(cli, silent: bool) -> None:
+-    """/new is a full boundary: re-derive model/provider from config.yaml so a
+-    session-only ``/model --session`` switch never leaks into the next session.
+-    Best-effort — an unreachable default must never block /new. Module-level helper (like
+-    ``_apply_new_session_title``): tests drive ``new_session`` unbound on a SimpleNamespace."""
+-    from cli import CLI_CONFIG, _cprint, _split_model_config_default, logger
+-    _model_config = CLI_CONFIG.get("model", {})
+-    if isinstance(_model_config, dict):
+-        _raw_default = _model_config.get("default") or _model_config.get("model") or ""
+-        _config_provider = _model_config.get("provider", "")
+-    else:
+-        _raw_default, _config_provider = (_model_config or ""), ""
+-    _config_model, _ = _split_model_config_default(_raw_default)
+-    if not _config_model or _config_model == getattr(cli, "model", None):
+-        return
+-    try:
+-        from hermes_cli.model_switch import switch_model as _switch_model
+-
+-        r = _switch_model(
+-            raw_input=_config_model,
+-            current_provider=cli.provider or "",
+-            current_model=cli.model or "",
+-            current_base_url=cli.base_url or "",
+-            current_api_key=cli.api_key or "",
+-            is_global=False,
+-            explicit_provider=_config_provider or "")
+-        if not r.success:
+-            return
+-        # A gateway /new already opened the next session on the profile's default (``session.create``
+-        # without a model); the stand-in still points at the ended session, which a switch would rewrite.
+-        if cli.agent and not getattr(cli, "_gateway_session_open", False):
+-            cli.agent.switch_model(
+-                new_model=r.new_model, new_provider=r.target_provider, api_key=r.api_key,
+-                base_url=r.base_url, api_mode=r.api_mode,
+-                capabilities=getattr(r, "runtime_capabilities", None))
+-        cli.model = r.new_model
+-        cli.provider = r.target_provider
+-        cli.requested_provider = r.target_provider
+-        cli._explicit_api_key = r.api_key
+-        cli._explicit_base_url = r.base_url
+-        if r.api_key:
+-            cli.api_key = r.api_key
+-        if r.base_url:
+-            cli.base_url = r.base_url
+-        if r.api_mode:
+-            cli.api_mode = r.api_mode
+-        if not silent:
+-            _cprint(f"  {t('cli.session.model_reset_default', model=r.new_model)}")
+-    except Exception:
+-        logger.debug("/new model reset to config default failed", exc_info=True)
+ 
+ 
+ def _apply_new_session_title(cli, title: str) -> Optional[str]:
+@@ -564,7 +512,10 @@
+         from cli import (
+             CLI_CONFIG, _parse_service_tier_config,
+             _sync_process_session_id, datetime)
+-        from hermes_cli.cli_model_switch_mixin import _resolve_cli_reasoning
++        from hermes_cli.cli_model_switch_mixin import CLIModelSwitchMixin, _resolve_cli_reasoning
++        # A pending --once belongs to the old conversation, not the next session's route.
++        CLIModelSwitchMixin._restore_model_runtime_snapshot(
++            self, getattr(self, "_pending_one_turn_model_restore", None))
+         old_session_id = self.session_id
+         _boundary_snapshot = None
+         if self.agent:
+@@ -602,16 +553,13 @@
+         self.conversation_history = []
+         self._pending_title = None
+         self._resumed = False
+-        # An explicit -m/--model was for the previous session only.
++        # A startup -m must not override a later /resume; the selected route itself stays active.
+         self._explicit_model_override = False
+-        # Session-scoped overrides (/model --session, /fast, one-turn restores) don't carry over.
+-        # Re-derive model/provider and service tier from config.yaml so a session-only switch never leaks
+-        # into the next session (#48055, #23131).
++        # Keep the active model/provider/endpoint. /new clears conversation state, not the selected route.
++        # Fast and reasoning overrides still reset for the next conversation.
+         self._pending_one_turn_model_restore = None
+         self.service_tier = _parse_service_tier_config(CLI_CONFIG["agent"].get("service_tier", ""))
+-        _reset_model_to_config_default(self, silent)
+-        # After the model reset: the effort belongs to the model the fresh session lands on (a /reasoning
+-        # session override is dropped, the default model's per-model override is kept).
++        # Drop /reasoning's session override, retaining the active model's per-model default.
+         _resolve_cli_reasoning(self)
+         _sync_process_session_id(self.session_id)
+ 
+diff --git a/hermes_cli/cli_init_mixin.py b/hermes_cli/cli_init_mixin.py
+--- a/hermes_cli/cli_init_mixin.py
++++ b/hermes_cli/cli_init_mixin.py
+@@ -21,7 +21,7 @@
+ # Log-record parity with the origin module.
+ logger = logging.getLogger("cli")
+ 
+-# The launch flags that pick the model route: ``/new`` starts on the profile's default route.
++# Launch route fields excluded when a snapshot restore needs a replacement session.
+ _ROUTE_FLAGS = ("model", "provider", "api_key", "base_url")
+ 
+ 
+@@ -473,10 +473,9 @@
+ 
+     def _new_session_id(self, now, *, branch_of=None, title=None):
+         """The id main mints for /new (``new_session_id``) and /branch (``mint_session_id``). On a gateway
+-        store it is a session the gateway created: /new is a fresh ``session.create`` on the profile's
+-        default model (an explicit -m was for the previous session only) with the run's other launch
+-        flags, /branch the child of
+-        ``session.mutate branch``. Before this CLI opened its gateway session (or off the gateway) it is
++        store it is a session the gateway created: /new is a fresh ``session.create`` on the active
++        model/provider route with the run's other launch flags, /branch the child of ``session.mutate
++        branch``. Before this CLI opened its gateway session (or off the gateway) it is
+         main's local mint, which ``_ensure_gateway_session`` replaces on first use, as at startup."""
+         from hermes_cli.gateway_session_store import GatewaySessionStore
+         store = getattr(self, "_session_db", None)
+@@ -494,9 +493,13 @@
+                 store.set_session_yolo(child, True)
+                 enable_session_yolo(child)
+             return child
+-        # The run's other launch flags hold for every session it opens, as main's one AIAgent did across /new.
+-        launch = {key: value for key, value in _gateway_launch(self).items() if key not in _ROUTE_FLAGS}
++        # Keep the run's other launch flags, but use the CURRENT route, not startup flags or defaults.
++        launch = _gateway_launch(self)
++        launch.update(model=getattr(self, "model", None),
++                      provider=getattr(self, "provider", None) or getattr(self, "requested_provider", None))
+         sid = store.create(launch, record_cwd=False)
++        # A restarted owner must get this session's key, not a stale startup provider's key.
++        store.connection.launch_api_key = launch["api_key"] or None
+         self.session_id = sid
+         return sid
+ 
+diff --git a/tests/hermes_cli/test_reasoning_command.py b/tests/hermes_cli/test_reasoning_command.py
+--- a/tests/hermes_cli/test_reasoning_command.py
++++ b/tests/hermes_cli/test_reasoning_command.py
+@@ -107,9 +107,8 @@
+         self.assertEqual(agent.reasoning_config, {"enabled": True, "effort": "medium"})
+         agent.reset_session_state.assert_called_once()
+ 
+-    def test_new_session_resets_service_tier_and_model_from_config(self):
+-        """/new re-derives service tier and model from config.yaml — session
+-        /fast and /model switches do not carry forward (#48055, #23131)."""
++    def test_new_session_keeps_model_route_and_resets_service_tier(self):
++        """A fresh conversation keeps the selected model/provider, not the config default."""
+         from cli import CLI_CONFIG, HermesCLI
+ 
+         agent = SimpleNamespace(
+@@ -128,23 +127,17 @@
+             _notify_session_boundary=MagicMock(),
+             # Session had switched to fast + a session-only model.
+             service_tier="priority",
+-            _pending_one_turn_model_restore={"model": "stale"},
++            _pending_one_turn_model_restore=None,
+             model="session-switched-model",
+-            provider="openrouter",
+-            requested_provider="openrouter",
++            provider="custom:active",
++            requested_provider="custom:active",
++            _explicit_api_key="k",
++            _explicit_base_url="https://active.example/v1",
+             api_key="k",
+-            base_url="",
+-            api_mode="",
+-        )
+-
+-        fake_result = SimpleNamespace(
+-            success=True,
+-            new_model="config-default-model",
+-            target_provider="openrouter",
+-            api_key="k2",
+-            base_url="https://openrouter.ai/api/v1",
++            base_url="https://active.example/v1",
+             api_mode="chat_completions",
+         )
++
+         with patch.dict(
+             CLI_CONFIG.setdefault("agent", {}),
+             {"reasoning_effort": "medium", "service_tier": "normal"},
+@@ -152,17 +145,25 @@
+             CLI_CONFIG,
+             {"model": {"default": "config-default-model", "provider": "openrouter"}},
+         ), patch(
+-            "hermes_cli.model_switch.switch_model", return_value=fake_result
+-        ):
++            "hermes_cli.model_switch.switch_model"
++        ) as switch:
+             HermesCLI.new_session(stub, silent=True)
+ 
+         # Fast override cleared back to config default (normal → None).
+         self.assertIsNone(stub.service_tier)
+         # One-turn restore snapshot cleared.
+         self.assertIsNone(stub._pending_one_turn_model_restore)
+-        # Model reset to the config default via the live agent swap.
+-        self.assertEqual(stub.model, "config-default-model")
+-        agent.switch_model.assert_called_once()
++        self.assertEqual((stub.model, stub.provider, stub.requested_provider),
++                         ("session-switched-model", "custom:active", "custom:active"))
++        self.assertEqual((stub.api_key, stub.base_url, stub.api_mode),
++                         ("k", "https://active.example/v1", "chat_completions"))
++        self.assertEqual((stub._explicit_api_key, stub._explicit_base_url),
++                         ("k", "https://active.example/v1"))
++        self.assertNotEqual(stub.session_id, "old-session")
++        self.assertEqual(stub.conversation_history, [])
++        switch.assert_not_called()
++        agent.switch_model.assert_not_called()
++        agent.reset_session_state.assert_called_once()
+ 
+ 
+ # ---------------------------------------------------------------------------
+diff --git a/tests/hermes_cli/test_gateway_model_switch_cli.py b/tests/hermes_cli/test_gateway_model_switch_cli.py
+--- a/tests/hermes_cli/test_gateway_model_switch_cli.py
++++ b/tests/hermes_cli/test_gateway_model_switch_cli.py
+@@ -55,39 +55,49 @@
+     return shown
+ 
+ 
+-def test_new_after_a_model_switch_leaves_the_ended_session_alone(gateway):
++@pytest.mark.parametrize("pending_once", [False, True])
++def test_new_after_a_model_switch_leaves_the_ended_session_alone(gateway, pending_once):
+     """Review item 1: /new reset the model to the config default through the stand-in before it was
+     rebound, so ``session.mutate model`` rewrote the session just ended (a later /resume of it came back
+-    on the default). The new session is created on the profile's default and runs it."""
++    on the default). The fresh session inherits the active route without rewriting the old one."""
+     from cli import CLI_CONFIG, HermesCLI
+     from hermes_cli.cli_init_mixin import CLIInitMixin
+     from hermes_cli.gateway_session_store import GatewaySessionStore
+     conn, client = gateway
+     rpc = client.rpc
+ 
+-    async def create_on_the_default(method, **params):
++    async def create_on_the_selected_route(method, **params):
+         if method != "session.create":
+             return await rpc(method, **params)
+         client.calls.append((method, params))
+         return {"stored_session_id": "local-new", "revision": 1, "execution_generation": 1,
+-                "info": {"model": "config-default-model", "provider": "openrouter"}}
+-    client.rpc = create_on_the_default
++                "info": {"model": params.get("model", "config-default-model"),
++                         "provider": params.get("provider", "openrouter")}}
++    client.rpc = create_on_the_selected_route
+     agent = GatewayAgent(connection=conn, session_id=SID, model="config-default-model", provider="openrouter")
+-    agent.switch_model(new_model="gpt-x", new_provider="openrouter")  # /model gpt-x
++    agent.switch_model(new_model="gpt-x", new_provider="custom:active")  # /model gpt-x
+     client.calls.clear()
+-    cli = _cli(agent=agent, model="gpt-x", _session_db=GatewaySessionStore(connection=conn), conversation_history=[],
++    cli = _cli(agent=agent, model="gpt-x", provider="custom:active", requested_provider="custom:active",
++               _explicit_api_key="active-key", _explicit_base_url="https://active.example/v1",
++               _session_db=GatewaySessionStore(connection=conn), conversation_history=[],
+                _pending_title=None, _resumed=False, _notify_session_boundary=MagicMock(),
+                _discard_session_if_empty=MagicMock(), service_tier=None, enabled_toolsets=None, _explicit_toolsets=False)
+     cli._new_session_id = lambda now: CLIInitMixin._new_session_id(cli, now)
+-    default = ModelSwitchResult(success=True, new_model="config-default-model", target_provider="openrouter",
+-                                api_key="k", base_url="", api_mode="chat_completions")
++    if pending_once:
++        cli._pending_one_turn_model_restore = HermesCLI._snapshot_model_runtime(cli)
++        agent.switch_model(new_model="one-turn-only", new_provider="openrouter", once=True)
++        cli.model, cli.provider = "one-turn-only", "openrouter"
+     with patch.dict(CLI_CONFIG, {"model": {"default": "config-default-model", "provider": "openrouter"}}), \
+-            patch("hermes_cli.model_switch.switch_model", return_value=default):
++            patch("hermes_cli.model_switch.switch_model") as switch:
+         HermesCLI.new_session(cli, silent=True)
+     assert _mutations(client) == []
+-    assert "model" not in dict(client.calls)["session.create"]  # the profile's default
++    created = dict(client.calls)["session.create"]
++    assert (created["model"], created["provider"]) == ("gpt-x", "custom:active")
++    assert (created["api_key"], created["base_url"]) == ("active-key", "https://active.example/v1")
++    switch.assert_not_called()
+     assert cli.session_id == agent.session_id == "local-new"
+-    assert (cli.model, agent.model) == ("config-default-model", "config-default-model")
++    assert (cli.model, agent.model) == ("gpt-x", "gpt-x")
++    assert (cli.provider, agent.provider) == ("custom:active", "custom:active")
+ 
+ 
+ def test_model_before_the_first_turn_commits_on_the_session_that_turn_runs(gateway, monkeypatch):
+diff --git a/tests/hermes_cli/test_gateway_session_store.py b/tests/hermes_cli/test_gateway_session_store.py
+--- a/tests/hermes_cli/test_gateway_session_store.py
++++ b/tests/hermes_cli/test_gateway_session_store.py
+@@ -340,20 +340,20 @@
+ 
+ 
+ def test_new_session_id_is_a_fresh_gateway_session(store, monkeypatch):
+-    """/new: the id main mints is the gateway's new session (created with the profile's default model:
+-    an explicit -m was for the previous session only)."""
++    """/new mints a gateway session on the active route, even without an explicit launch -m."""
+     from hermes_cli.cli_init_mixin import CLIInitMixin
+     monkeypatch.delenv("HERMES_SESSION_SOURCE", raising=False)
+     db, client = store
+     host = types.SimpleNamespace(session_id="local-old", _resumed=True, _session_db=db, model="m-explicit",
+-                                 _explicit_model_override=True, requested_provider=None, enabled_toolsets=["file"],
++                                 _explicit_model_override=False, provider="custom:active",
++                                 requested_provider="custom:active", enabled_toolsets=["file"],
+                                  _explicit_toolsets=True, _gateway_session_open=True)
+     host._ensure_gateway_session = lambda: CLIInitMixin._ensure_gateway_session(host)
+     db.open_session(cli("local-old", resumed=True))
+     sid = CLIInitMixin._new_session_id(host, None)
+     assert sid == "local-new" and host.session_id == "local-new"
+     _method, params = [c for c in client.calls if c[0] == "session.create"][-1]
+-    assert "model" not in params and params["toolsets"] == ["file"]
++    assert (params["model"], params["provider"], params["toolsets"]) == ("m-explicit", "custom:active", ["file"])
+     # The profile default is not a pick: the gateway resolves it, so a stale name can't refuse /new (#138670).
+     host._explicit_toolsets = False
+     CLIInitMixin._new_session_id(host, None)
+@@ -656,20 +656,21 @@
+ 
+ def test_new_session_keeps_the_runs_launch_policy(store, monkeypatch):
+     """CLI-3: `/new` keeps `--max-turns`, `--checkpoints`, `--run-budget`, `-v` and `-s` (main kept one
+-    AIAgent across /new); only the explicit model route is left to the profile default."""
++    AIAgent across /new), along with the active model route."""
+     from hermes_cli.cli_init_mixin import CLIInitMixin
+     monkeypatch.setattr("agent.skill_commands.resolve_auto_load_skills", lambda config=None: [])
+     db, client = store
+     db.open_session(cli("local-old", resumed=True))
+     host = types.SimpleNamespace(session_id="local-old", _session_db=db, _gateway_session_open=True,
+-                                 model="m-explicit", _explicit_model_override=True, requested_provider="openrouter",
++                                 model="m-explicit", provider="openrouter", _explicit_model_override=True,
++                                 requested_provider="openrouter",
+                                  enabled_toolsets=["file"], _explicit_toolsets=True, _explicit_max_turns=3, _explicit_checkpoints=True,
+                                  _explicit_run_budget=60, verbose=True, _preload_skills_requested=["arxiv"])
+     CLIInitMixin._new_session_id(host, None)
+     params = [p for m, p in client.calls if m == "session.create"][-1]
+     assert (params["max_turns"], params["checkpoints"], params["run_budget"], params["verbose"],
+             params["skills"], params["toolsets"]) == (3, True, 60.0, True, ["arxiv"], ["file"]), params
+-    assert "model" not in params and "provider" not in params
++    assert (params["model"], params["provider"]) == ("m-explicit", "openrouter")
+ 
+ 
+ def test_branch_carries_a_live_yolo_onto_the_gateway_child(store):
+diff --git a/tests/hermes_cli/test_gateway_resume_launch_key.py b/tests/hermes_cli/test_gateway_resume_launch_key.py
+--- a/tests/hermes_cli/test_gateway_resume_launch_key.py
++++ b/tests/hermes_cli/test_gateway_resume_launch_key.py
+@@ -306,27 +306,38 @@
+ 
+ 
+ @pytest.mark.asyncio
+-async def test_branch_after_new_in_a_typed_key_cli_switches_to_the_child(tmp_path, monkeypatch):
+-    """Review probe (#141481, CLI-34): ``/new`` in a ``--api-key`` CLI opens a session on the profile's default
+-    route, without the key, and ``/branch`` of it attaches the child the owner just made with the plain
+-    fallback. Held to the typed key, the attach raised the ``--api-key`` mismatch after the owner had
+-    committed the child: the CLI stayed on the parent, and each retry made another child."""
++@pytest.mark.parametrize('selected_key', [RAW, 'SWITCHED-PROVIDER-KEY'])
++async def test_branch_after_new_in_a_typed_key_cli_switches_to_the_child(tmp_path, monkeypatch, selected_key):
++    """/new preserves the selected route/key across /branch and an owner restart."""
+     from datetime import datetime
+     from gateway import run
+     from hermes_cli.cli_init_mixin import CLIInitMixin
+     owners = await _Owners().start(tmp_path, monkeypatch)
+-    monkeypatch.setattr(run, '_load_gateway_config', lambda *a, **k: {'platform_toolsets': {'cli': []}, 'model': 'm'})
++    monkeypatch.setattr(run, '_load_gateway_config', lambda *a, **k: {'platform_toolsets': {'cli': []}, 'model': 'config-default-model'})
+     conn = GatewayConnection(connect=owners.dial)
+     try:
+         store = GatewaySessionStore(conn)
+         cli = _typed(owners.keyed, RAW)
++        cli.model, cli.provider = 'm', 'openrouter'
++        cli._explicit_api_key, cli._explicit_base_url = selected_key, LAUNCH['base_url']
+         cli._session_db, cli._gateway_session_open = store, True
+         await asyncio.to_thread(store.open_session, cli, LAUNCH)
+         fresh = await asyncio.to_thread(CLIInitMixin._new_session_id, cli, datetime.now())  # /new
+-        assert owners.key_of(fresh) is None
++        assert owners.key_of(fresh) == selected_key
++        from gateway.session_policy import policy_for_source
++        policy = policy_for_source(owners.current.runner, owners.current.sessions[fresh].source)
++        assert policy is not None
++        assert (policy.model, policy.provider, policy.base_url) == ('m', 'openrouter', LAUNCH['base_url'])
++        assert owners.store._db.get_session(fresh)['model'] == 'm'
++        assert owners.store._db.get_session(owners.keyed)['model'] == 'm'
++        assert owners.store._db.get_messages(fresh) == []
+         owners.store._db.append_message(fresh, role='user', content='hello')
+         child = await asyncio.to_thread(CLIInitMixin._new_session_id, cli, datetime.now(), branch_of=fresh)  # /branch
+         assert child != fresh and store.current['stored_session_id'] == child
++        await owners.hang_up(conn)
++        await owners.boot('restarted')
++        await asyncio.to_thread(conn.start, 10)
++        assert owners.key_of(fresh) == owners.key_of(child) == selected_key
+     finally:
+         await owners.close(conn)
+ 
+diff --git a/tests/hermes_cli/test_model_switch_reasoning_reresolve.py b/tests/hermes_cli/test_model_switch_reasoning_reresolve.py
+--- a/tests/hermes_cli/test_model_switch_reasoning_reresolve.py
++++ b/tests/hermes_cli/test_model_switch_reasoning_reresolve.py
+@@ -68,11 +68,11 @@
+         assert not CLIModelSwitchMixin._stage_and_swap_model(cli, _result("glm-5.3-flash"), "deepseek-v4-flash")
+         assert (cli.model, cli.reasoning_config) == ("deepseek-v4-flash", _MEDIUM)
+ 
+-        # /new on a session whose config default carries an override: the default model's effort,
+-        # not the bare global key, and a /reasoning session override does not carry over.
+-        with patch.dict(cli_mod.CLI_CONFIG["model"], {"default": "glm-5.3-flash"}):
+-            cli = _cli("glm-5.3-flash", {"enabled": False})
+-            cli.conversation_history, cli.session_id, cli._session_db, cli._pending_title = [], "old", None, None
+-            cli._resumed, cli._notify_session_boundary = False, lambda *_a, **_k: None
+-            CLISessionMixin.new_session(cli, silent=True)
++        # /new keeps the active model's effort, even when config selects another model.
++        # A /reasoning session override still does not carry over.
++        cli = _cli("glm-5.3-flash", {"enabled": False})
++        cli.conversation_history, cli.session_id, cli._session_db, cli._pending_title = [], "old", None, None
++        cli._resumed, cli._notify_session_boundary = False, lambda *_a, **_k: None
++        CLISessionMixin.new_session(cli, silent=True)
++        assert cli.model == "glm-5.3-flash"
+         assert cli.reasoning_config == _HIGH
+diff --git a/tests/hermes_cli/test_cli_new_session.py b/tests/hermes_cli/test_cli_new_session.py
+--- a/tests/hermes_cli/test_cli_new_session.py
++++ b/tests/hermes_cli/test_cli_new_session.py
+@@ -153,8 +153,11 @@
+     cli = _prepare_cli_with_active_session(tmp_path)
+     old_session_id = cli.session_id
+     old_session_start = cli.session_start
+-
+-    cli.process_command("/new")
++    cli.model = cli.agent.model = "session-picked-model"
++    cli.provider = cli.requested_provider = "custom:session"
++
++    with patch.dict("cli.CLI_CONFIG", {"model": {"default": "config-default-model", "provider": "openrouter"}}):
++        cli.process_command("/new")
+ 
+     assert cli.session_id != old_session_id
+ 
+@@ -164,6 +167,9 @@
+ 
+     new_session = cli._session_db.get_session(cli.session_id)
+     assert new_session is not None
++    assert new_session["model"] == cli.model == cli.agent.model == "session-picked-model"
++    assert (cli.provider, cli.requested_provider) == ("custom:session", "custom:session")
++    assert cli.conversation_history == []
+ 
+     cli._session_db.append_message(cli.session_id, role="user", content="next turn")
+ 
