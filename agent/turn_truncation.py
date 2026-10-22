@@ -254,6 +254,8 @@ def _abort_reason(agent: Any, content: Any, has_tool_calls: bool) -> Optional[tu
     burned the budget on one fragment (reasoning stripped first)."""
     if has_tool_calls:
         return None
+    from agent.message_content import flatten_message_text
+    content = flatten_message_text(content)
     if content and _THINK_TAG_RE.search(content) and not agent._has_content_after_think_block(content):
         return _THINKING_EXHAUSTED
     visible = agent._strip_think_blocks(content) if isinstance(content, str) else content
@@ -316,18 +318,29 @@ def _continue_text(st: _Trunc, _retry: TurnRetryState, assistant_message: Any) -
     _interim_content = getattr(assistant_message, "content", None)
     from agent.agent_runtime_helpers import strip_private_reasoning
     from agent.dsml import has_unexecuted_dsml
-    if isinstance(_interim_content, str) and has_unexecuted_dsml(strip_private_reasoning(_interim_content)):
-        # An unexecuted tool serialization is not a recoverable answer fragment.
-        # Keep the existing bounded length retry, but never stitch/replay its body.
-        _interim_content = None
+    _interim_content = strip_private_reasoning(_interim_content)
+    _joined_content = _join_truncated_parts([*st.truncated_response_parts, (_interim_content, st.is_stub)])
+    if has_unexecuted_dsml(strip_private_reasoning(_joined_content)):
+        # Fail closed, rather than asking to continue an envelope whose unknown
+        # argument tail no longer contains a recognizable DSML token. No hidden
+        # cross-turn rejection state or provider-generated sentinel is needed.
         agent._current_streamed_assistant_text = ""
         agent._last_content_with_tools = None
         agent._last_content_tools_all_housekeeping = False
+        collapse_continuation_trail(agent, messages, st.current_turn_user_idx, finish_reason="length", parts=[])
+        st.truncated_response_parts = []
+        return st.end_turn(
+            "The model returned an unparsed tool call, so this turn did not complete. "
+            "Its text was discarded without execution. Retry your request or switch models.",
+            "Unexecuted DSML in a truncated response", failure=("invalid_response", True),
+        )
     if not _interim_content and not st.is_stub:
         # Thinking-only truncation: continuing with thinking ON re-burns the budget.
         agent._ephemeral_reasoning_off = True
     if _interim_content:
-        interim_msg = agent._build_assistant_message(assistant_message, st.finish_reason)
+        interim_msg = agent._build_assistant_message(
+            assistant_message, st.finish_reason, dsml_context=_joined_content,
+        )
         interim_msg["_length_continuation_fragment"] = True  # ceiling exit drops these
         append_message(messages, interim_msg)
         st.truncated_response_parts.append((_interim_content, st.is_stub))

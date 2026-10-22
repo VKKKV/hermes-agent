@@ -7,6 +7,7 @@ Callers remove private reasoning *before* classification, without stripping DSML
 """
 from __future__ import annotations
 
+from functools import lru_cache
 import re
 
 _PIPE = r"[|\uFF5C]{1,2}[ \t]*"
@@ -14,91 +15,80 @@ _TOKEN = re.compile(
     rf"</?{_PIPE}DSML{_PIPE}(?:calls|tool_calls|function_calls|invoke|parameter)(?=[\s>]|\Z)",
     re.IGNORECASE,
 )
-_FENCE = re.compile(r" {0,3}(`{3,}|~{3,})([^\r\n]*)")
-_TICKS = re.compile(r"`+")
 
 
-def _inline_code_spans(text: str, start: int, end: int):
-    """Pair equal-length backtick runs in linear time, including unmatched runs."""
-    runs = list(_TICKS.finditer(text, start, end))
-    next_run: dict[int, int] = {}
-    partners: list[int | None] = [None] * len(runs)
-    for index in range(len(runs) - 1, -1, -1):
-        size = runs[index].end() - runs[index].start()
-        partners[index] = next_run.get(size)
-        next_run[size] = index
-    index = 0
-    while index < len(runs):
-        partner = partners[index]
-        if partner is None:
-            index += 1
-        else:
-            yield runs[index].start(), runs[partner].end()
-            index = partner + 1
+@lru_cache(maxsize=1)
+def _markdown_parser():
+    # Already shipped by Rich. Use its block/container and backtick rules rather
+    # than pairing ticks across unrelated paragraphs or guessing list indentation.
+    from markdown_it import MarkdownIt
 
-
-def _code_spans(text: str):
-    """Ordered Markdown code spans; unclosed fences remain literal code examples."""
-    fence_start = None
-    fence_char = ""
-    fence_size = 0
-    indented_start = None
-    previous_blank = True
-    prose_start = 0
-    offset = 0
-    for line in text.splitlines(keepends=True):
-        blank = not line.strip()
-        indented = line.expandtabs(4).startswith("    ")
-        if fence_start is None:
-            if indented_start is not None and not (blank or indented):
-                yield indented_start, offset
-                indented_start = None
-                prose_start = offset
-            if indented_start is not None or (indented and not blank and previous_blank):
-                if indented_start is None:
-                    yield from _inline_code_spans(text, prose_start, offset)
-                    indented_start = offset
-                offset += len(line)
-                previous_blank = blank
-                continue
-        match = _FENCE.match(line)
-        if match and fence_start is None:
-            marker, info = match.groups()
-            if marker[0] == "`" and "`" in info:
-                offset += len(line)
-                continue
-            yield from _inline_code_spans(text, prose_start, offset)
-            fence_start, fence_char, fence_size = offset, marker[0], len(marker)
-        elif match and fence_start is not None:
-            marker, info = match.groups()
-            if marker[0] == fence_char and len(marker) >= fence_size and not info.strip():
-                yield fence_start, offset + len(line)
-                fence_start = None
-                prose_start = offset + len(line)
-        offset += len(line)
-        previous_blank = blank
-    if fence_start is not None:
-        yield fence_start, len(text)
-    elif indented_start is not None:
-        yield indented_start, len(text)
-    else:
-        yield from _inline_code_spans(text, prose_start, len(text))
+    parser = MarkdownIt('commonmark').disable('reference')
+    # All non-code bytes must remain searchable, including link destinations,
+    # raw HTML and escaped punctuation. Only actual backticks exempt inline text.
+    parser.inline.ruler.enableOnly(['text', 'newline', 'backticks', 'escape'])
+    return parser
 
 
 def has_unexecuted_dsml(text: str) -> bool:
-    """Whether visible text contains protocol outside Markdown code (O(n))."""
+    """Whether visible text contains protocol outside actual Markdown code."""
     if not text or not _TOKEN.search(text):
         return False
-    spans = iter(_code_spans(text))
-    code_start, code_end = next(spans, (len(text), len(text)))
-    for token in _TOKEN.finditer(text):
-        while code_end <= token.start():
-            code_start, code_end = next(spans, (len(text), len(text)))
-        if not code_start <= token.start() < code_end:
+    seen = 0
+    for block in _markdown_parser().parse(text):
+        seen += len(_TOKEN.findall(block.content))
+        if block.type in ('fence', 'code_block'):
+            # Fence info is not code content (and a backtick in backtick-fence
+            # info invalidates the opener, which the parser already handles).
+            if _TOKEN.search(block.info):
+                return True
+        elif block.type == 'inline':
+            if any(_TOKEN.search(child.content) for child in block.children or ()
+                   if child.type != 'code_inline'):
+                return True
+        elif _TOKEN.search(block.content):
             return True
-    return False
+    # markdown-it intentionally drops blocks past maxNesting. Unseen protocol
+    # must fail closed, not inherit a code exemption the parser never proved.
+    return seen != len(_TOKEN.findall(text))
 
 
-def sanitize_dsml(text: str) -> str:
+def sanitize_dsml(text: str, *, context: str | None = None) -> str:
     """Never salvage narration or unknown argument tails from an unexecuted attempt."""
-    return "" if has_unexecuted_dsml(text) else text
+    if context is None:
+        return "" if has_unexecuted_dsml(text) else text
+    from agent.agent_runtime_helpers import strip_private_reasoning
+
+    # Classify a continuation in context, but return only its scrubbed fragment.
+    return "" if has_unexecuted_dsml(strip_private_reasoning(context)) else text
+
+
+def filter_final_sources(agent, message, promoted, parts):
+    """Filter only eligible sources; preserve precedence and joined code context."""
+    from agent.agent_runtime_helpers import strip_private_reasoning
+    from agent.conversation_loop import _join_truncated_parts
+
+    def joined(candidate):
+        return strip_private_reasoning(_join_truncated_parts([*parts, (candidate, False)]))
+
+    candidate = strip_private_reasoning(promoted or message.content or "")
+    content = joined(candidate) if candidate.strip() else ""
+    leaked = has_unexecuted_dsml(content)
+    if leaked:
+        # Never salvage arguments or stale caches from a real current attempt.
+        message.content = ""
+        promoted, content = None, ""
+        agent._current_streamed_assistant_text = ""
+        agent._last_content_with_tools = None
+        agent._last_content_tools_all_housekeeping = False
+    elif not parts and not agent._has_content_after_think_block(candidate):
+        stream = getattr(agent, "_current_streamed_assistant_text", "") or ""
+        if has_unexecuted_dsml(joined(stream)):
+            agent._current_streamed_assistant_text = ""
+            stream = ""
+        if (not agent._has_content_after_think_block(stream)
+                and getattr(agent, "_last_content_tools_all_housekeeping", False)
+                and has_unexecuted_dsml(joined(getattr(agent, "_last_content_with_tools", "") or ""))):
+            agent._last_content_with_tools = None
+            agent._last_content_tools_all_housekeeping = False
+    return promoted, content, leaked

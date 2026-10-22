@@ -1573,14 +1573,14 @@ def _assistant_reasoning_text(agent, assistant_message) -> Optional[str]:
     return _sanitize_surrogates(reasoning_text) if reasoning_text else reasoning_text
 
 
-def _assistant_content_for_storage(agent, assistant_message):
-    # Sanitize surrogates (Kimi/GLM via Ollama emit code points that crash json.dumps),
-    # strip inline <think> tags at the storage boundary (they leaked to platforms and
-    # polluted titles), then redact inlined credentials before the message enters
-    # history / state.db / gateway delivery (no-op with HERMES_REDACT_SECRETS off).
+def _assistant_content_for_storage(agent, assistant_message, *, dsml_context=None):
+    # Keep invalid Unicode, private reasoning and credentials out of history.
+    # Continuation classification needs its prefix; redaction still acts on this
+    # fragment alone (no-op with HERMES_REDACT_SECRETS off).
     content = _sanitize_surrogates(flatten_message_text(getattr(assistant_message, "content", None)))
     if isinstance(content, str) and content:
-        content = agent._strip_think_blocks(content).strip()
+        kwargs = {} if dsml_context is None else {"dsml_context": dsml_context}
+        content = agent._strip_think_blocks(content, **kwargs).strip()
         if content:
             from agent.redact import redact_sensitive_text
             content = redact_sensitive_text(content)
@@ -1636,7 +1636,7 @@ def _assistant_tool_call_dict(agent, tool_call, index: int) -> dict:
     return tc_dict
 
 
-def build_assistant_message(agent, assistant_message, finish_reason: str) -> dict:
+def build_assistant_message(agent, assistant_message, finish_reason: str, *, dsml_context=None) -> dict:
     """Build a normalized assistant message dict (reasoning, reasoning_details,
     optional tool_calls) shared by the tool-call and final-response paths.
     Textless turns are NOT padded here: ``repair_empty_non_final_messages`` is the
@@ -1645,7 +1645,7 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
     assistant_tool_calls = getattr(assistant_message, "tool_calls", None)
     reasoning_text = _assistant_reasoning_text(agent, assistant_message)
     msg = stamp_message_timestamp({"role": "assistant",
-        "content": _assistant_content_for_storage(agent, assistant_message), "reasoning": reasoning_text,
+        "content": _assistant_content_for_storage(agent, assistant_message, dsml_context=dsml_context), "reasoning": reasoning_text,
         "finish_reason": finish_reason})
 
     raw_reasoning_content = getattr(assistant_message, "reasoning_content", None)

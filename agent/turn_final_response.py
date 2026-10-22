@@ -68,7 +68,6 @@ def finish_text_response(
     stop gates accept it."""
     from agent.conversation_loop import (
         _CODEX_ACK_CONTINUATION_NUDGE, _DEGENERATE_FINAL_NUDGE, _DROPPED_TOOLCALL_NUDGE_CONTENT,
-        _join_truncated_parts
     )
 
     def _verdict(action: str, result: Optional[dict[str, Any]] = None) -> FinalResponseVerdict:
@@ -85,47 +84,12 @@ def finish_text_response(
             result=result,
         )
 
-    # A leaked tool attempt must retry, not complete or recover from a cache.
-    from agent.agent_runtime_helpers import strip_private_reasoning
-    from agent.dsml import has_unexecuted_dsml
-    _visible_content = strip_private_reasoning(assistant_message.content or "")
-    _dsml_candidates = [_visible_content]
-    if not _visible_content.strip():
-        # Only consult alternate sources when they could become the answer;
-        # private reasoning or a stale cache must not discard a valid reply.
-        _dsml_candidates.extend((
-            agent._extract_reasoning(assistant_message),
-            getattr(agent, "_current_streamed_assistant_text", ""),
-            getattr(agent, "_last_content_with_tools", ""),
-        ))
-    _dsml_leaked = not assistant_message.tool_calls and any(
-        isinstance(candidate, str) and has_unexecuted_dsml(strip_private_reasoning(candidate))
-        for candidate in _dsml_candidates
-    )
-    if _dsml_leaked:
-        logger.warning("Unparsed DSML tool attempt: entering empty-response recovery")
-        assistant_message.content = ""
-        agent._current_streamed_assistant_text = ""
-        agent._last_content_with_tools = None
-        agent._last_content_tools_all_housekeeping = False
-
-    # Reasoning-only clean stop on a trusted route (elsewhere reasoning is private and takes the
-    # ladder): some parsers (vLLM nemotron_v3 past ~500K prompt tokens) file the whole answer as
-    # reasoning when the closing delimiter is missing; ``stop`` means generation is complete, so
-    # promote it BEFORE the ladder. ``length`` (cut off mid-thought) stays on the continuation path.
-    # The promoted text is RETURNED as the answer but never written into the assistant
-    # row's ``content``: chain-of-thought stored as ordinary content is indistinguishable
-    # from a real reply on every history surface (#111761). The row keeps ``content``
-    # empty with the text in its reasoning fields and carries the promoted text as the
-    # ``api_content`` sidecar, so the next turn still replays it byte-identically.
-    # Anthropic thinking (signed ``thinking`` block, or a plugin's ``*.native_assistant`` carrier
-    # of native Claude turns) is a summary written by a separate model, never the answer: it
-    # takes the empty-response continuation below instead.
+    # Promotion eligibility is also the DSML candidate boundary. Private reasoning
+    # on any other route must not invalidate a clean stream/housekeeping answer.
     _content = assistant_message.content
     _promoted = None
     if (
         finish_reason == "stop"
-        and not _dsml_leaked
         and not assistant_message.tool_calls
         and (_content is None or (isinstance(_content, str) and not _content.strip()))
         and not any(
@@ -138,22 +102,30 @@ def finish_text_response(
         and answer_in_reasoning_capability(agent)
     ):
         _promoted = agent._extract_reasoning(assistant_message) or None
-        if _promoted:
-            # WARNING, not INFO: a model that keeps ending turns this way is stalled
-            # (planning monologue, zero tool calls) while the turn reports "complete".
-            logger.warning(
-                "Reasoning-only clean stop (%d chars) — returning the reasoning as the final "
-                "response (model=%s provider=%s api_calls=%d tool_turns=%d)",
-                len(_promoted), agent.model, agent.provider, api_call_count,
-                sum(1 for m in messages if isinstance(m, dict) and m.get("role") == "assistant" and m.get("tool_calls")),
-            )
+
+    from agent.dsml import filter_final_sources
+    _promoted, _joined_response, _dsml_leaked = filter_final_sources(
+        agent, assistant_message, _promoted, truncated_response_parts,
+    )
+    if _dsml_leaked:
+        logger.warning("Unparsed DSML tool attempt: entering empty-response recovery")
+
+    if _promoted:
+        # Only a trusted parser route may return reasoning. Keep it out of the
+        # durable row's content and replay through api_content (#111761).
+        logger.warning(
+            "Reasoning-only clean stop (%d chars) — returning the reasoning as the final "
+            "response (model=%s provider=%s api_calls=%d tool_turns=%d)",
+            len(_promoted), agent.model, agent.provider, api_call_count,
+            sum(1 for m in messages if isinstance(m, dict) and m.get("role") == "assistant" and m.get("tool_calls")),
+        )
     final_response = _promoted or assistant_message.content or ""
     # Unmute: _mute_post_response from a housekeeping tool turn must not silence
     # empty-response warnings on the final response path.
     agent._mute_post_response = False
 
     # Think-block-only / empty content: recovery path.
-    if not agent._has_content_after_think_block(final_response):
+    if _dsml_leaked or not agent._has_content_after_think_block(_joined_response):
         _ev = recover_empty_response(
             agent, assistant_message, response, finish_reason, final_response=final_response,
             messages=messages, api_messages=api_messages, conversation_history=conversation_history,
@@ -194,6 +166,7 @@ def finish_text_response(
         tool_results_this_turn, trailing_continue_intent,
     )
 
+    _message_kwargs = {"dsml_context": _joined_response} if truncated_response_parts else {}
     _ack_mode = intent_ack_continuation_mode(agent)
     # Said-continue-but-stopped guard: no tool calls but the short reply TAILS with an
     # announced next action. Reuses the SAME bounded continuation counter (max 2 per turn).
@@ -201,7 +174,7 @@ def finish_text_response(
     # and zero tool calls, chain-of-thought ending on "Let me batch the terminal calls..." is a
     # stalled model, and returning it as the answer aborts the tool loop while reporting
     # "complete" (#111761). Same cap, so a model that never acts still ends after 2 nudges.
-    _stall_text = agent._strip_think_blocks(final_response or "")
+    _stall_text = agent._strip_think_blocks(_joined_response)
     _stall_continue_intent = (
         bool(getattr(agent, "_stall_guards", True))
         and agent.valid_tool_names
@@ -253,7 +226,7 @@ def finish_text_response(
                 codex_ack_continuations + 1,
             )
         codex_ack_continuations += 1
-        interim_msg = agent._build_assistant_message(assistant_message, "incomplete")
+        interim_msg = agent._build_assistant_message(assistant_message, "incomplete", **_message_kwargs)
         if _promoted:
             # Same sidecar as the final row: the wire copy must carry the promoted text, not only
             # ``reasoning_content``, or the continuation replays an empty assistant turn.
@@ -276,7 +249,7 @@ def finish_text_response(
     codex_ack_continuations = 0
 
     if truncated_response_parts:
-        final_response = _join_truncated_parts([*truncated_response_parts, (final_response, False)])
+        final_response = _joined_response
         truncated_response_parts = []
         length_continue_retries = 0
         # The continuation recovered, so the fragments stay in the transcript.
@@ -305,7 +278,7 @@ def finish_text_response(
             partial_result(messages, api_call_count, user_response, error), "truncated", True,
         ))
 
-    final_msg = agent._build_assistant_message(assistant_message, finish_reason)
+    final_msg = agent._build_assistant_message(assistant_message, finish_reason, **_message_kwargs)
     if _promoted:
         # Replay sidecar only: ``content`` stays empty so the row is never mistaken for a
         # real reply; ``build_api_messages`` substitutes ``api_content`` on the wire.

@@ -855,7 +855,7 @@ def strip_private_reasoning(content: Any) -> str:
     return content
 
 
-def strip_think_blocks(agent, content: str) -> str:
+def strip_think_blocks(agent, content: str, *, dsml_context: Optional[str] = None) -> str:
     """Remove reasoning/thinking blocks from content, returning only visible text: closed tag
     pairs, unterminated open tags at a block boundary (mirrors ``gateway/stream_consumer.py``),
     stray orphan tags (all case-insensitive variants), and standalone tool-call XML blocks some
@@ -864,7 +864,7 @@ def strip_think_blocks(agent, content: str) -> str:
     for pattern in _THINK_STRIP_PATTERNS if content else ():
         content = pattern.sub('', content)
     from agent.dsml import sanitize_dsml
-    return sanitize_dsml(content)
+    return sanitize_dsml(content, context=dsml_context)
 
 
 def sync_credential_pool_entry_id(agent) -> None:
