@@ -42,9 +42,25 @@ def _code_spans(text: str):
     fence_start = None
     fence_char = ""
     fence_size = 0
+    indented_start = None
+    previous_blank = True
     prose_start = 0
     offset = 0
     for line in text.splitlines(keepends=True):
+        blank = not line.strip()
+        indented = line.expandtabs(4).startswith("    ")
+        if fence_start is None:
+            if indented_start is not None and not (blank or indented):
+                yield indented_start, offset
+                indented_start = None
+                prose_start = offset
+            if indented_start is not None or (indented and not blank and previous_blank):
+                if indented_start is None:
+                    yield from _inline_code_spans(text, prose_start, offset)
+                    indented_start = offset
+                offset += len(line)
+                previous_blank = blank
+                continue
         match = _FENCE.match(line)
         if match and fence_start is None:
             marker, info = match.groups()
@@ -60,8 +76,11 @@ def _code_spans(text: str):
                 fence_start = None
                 prose_start = offset + len(line)
         offset += len(line)
+        previous_blank = blank
     if fence_start is not None:
         yield fence_start, len(text)
+    elif indented_start is not None:
+        yield indented_start, len(text)
     else:
         yield from _inline_code_spans(text, prose_start, len(text))
 

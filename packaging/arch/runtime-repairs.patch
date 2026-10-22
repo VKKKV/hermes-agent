@@ -1,50 +1,16 @@
 diff --git a/agent/agent_runtime_helpers.py b/agent/agent_runtime_helpers.py
-index f797f890..0ec8e088 100644
+index 36f9d4b982..53007271c5 100644
 --- a/agent/agent_runtime_helpers.py
 +++ b/agent/agent_runtime_helpers.py
-@@ -50,31 +50,6 @@ _TOOL_CALL_BLOCK_PATTERNS = tuple(
-     for name in _TOOL_CALL_TAG_NAMES
- )
- 
--# DSML leaked by compatible providers is not visible assistant content.
--_DSML_PIPE = r'[|\uFF5C]{1,2}[ \t]*'
--_DSML_KINDS = r'(?:calls|tool_calls|function_calls|invoke|parameter)'
--_DSML_BLOCK_PATTERN = re.compile(
--    rf'<{_DSML_PIPE}DSML{_DSML_PIPE}(calls|tool_calls|function_calls|invoke|parameter)(?=[\s>])[^>]*>'
--    # Stop at repeated openers to avoid quadratic suffix scans.
--    rf'(?:(?!</?{_DSML_PIPE}DSML{_DSML_PIPE}\1(?=[\s>])).)*'
--    rf'</{_DSML_PIPE}DSML{_DSML_PIPE}\1>',
--    re.DOTALL | re.IGNORECASE,
--)
--# Only a trailing protocol envelope, not a backtick-quoted inline explanation.
--_DSML_ORPHAN_CLOSER_PATTERN = re.compile(
--    rf'</{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}>[ \t]*(?=\r?$|</)', re.IGNORECASE | re.MULTILINE
--)
--_DSML_UNTERMINATED_PATTERN = re.compile(
--    rf'(?:^|\n)[ \t]*<{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}(?=[\s>]|\Z).*$',
--    re.DOTALL | re.IGNORECASE,
--)
--
--# Unexecuted protocol payload, including orphan trailing closers.
--_DSML_LEAK_PATTERN = re.compile(
--    rf'(?:^|\n)[ \t]*<{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}(?=[\s>]|\Z)'
--    rf'|</{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}>\s*\Z', re.IGNORECASE,
--)
--
- # Named <function name=...> blocks; boundary- and name-gated (see _THINK_STRIP_PATTERNS note).
- _NAMED_FUNCTION_BLOCK_PATTERN = re.compile(
-     r'(?:(?<=^)|(?<=[\n\r.!?:]))[ \t]*'
-@@ -863,14 +838,22 @@ def _flatten_content_text(content: Any) -> str:
+@@ -839,12 +839,22 @@ def _flatten_content_text(content: Any) -> str:
  # tool-call CLOSERS only (bare/unterminated <function> is kept: a truncated streaming tail may still
  # be valuable, matching OpenClaw's asymmetry).
  _THINK_STRIP_PATTERNS = (
--    *_REASONING_BLOCK_PATTERNS, *_TOOL_CALL_BLOCK_PATTERNS, _DSML_BLOCK_PATTERN,
+-    *_REASONING_BLOCK_PATTERNS, *_TOOL_CALL_BLOCK_PATTERNS, _NAMED_FUNCTION_BLOCK_PATTERN,
 +    *_REASONING_BLOCK_PATTERNS, *_TOOL_CALL_BLOCK_PATTERNS,
-     _NAMED_FUNCTION_BLOCK_PATTERN,
++    _NAMED_FUNCTION_BLOCK_PATTERN,
      _UNTERMINATED_REASONING_BLOCK_PATTERN, _ORPHAN_REASONING_TAG_PATTERN,
--    _STRAY_TOOL_CALL_CLOSER_PATTERN, _DSML_ORPHAN_CLOSER_PATTERN,
--    _UNTERMINATED_TOOL_CALL_PATTERN, _DSML_UNTERMINATED_PATTERN,
-+    _STRAY_TOOL_CALL_CLOSER_PATTERN, _UNTERMINATED_TOOL_CALL_PATTERN,
+     _STRAY_TOOL_CALL_CLOSER_PATTERN, _UNTERMINATED_TOOL_CALL_PATTERN,
  )
  
  
@@ -60,7 +26,7 @@ index f797f890..0ec8e088 100644
  def strip_think_blocks(agent, content: str) -> str:
      """Remove reasoning/thinking blocks from content, returning only visible text: closed tag
      pairs, unterminated open tags at a block boundary (mirrors ``gateway/stream_consumer.py``),
-@@ -879,7 +862,8 @@ def strip_think_blocks(agent, content: str) -> str:
+@@ -853,7 +863,8 @@ def strip_think_blocks(agent, content: str) -> str:
      content = _flatten_content_text(content) if content else ""
      for pattern in _THINK_STRIP_PATTERNS if content else ():
          content = pattern.sub('', content)
@@ -70,174 +36,12 @@ index f797f890..0ec8e088 100644
  
  
  def sync_credential_pool_entry_id(agent) -> None:
-diff --git a/agent/repetition_guard.py b/agent/repetition_guard.py
-index a2df72c9..0a6b3927 100644
---- a/agent/repetition_guard.py
-+++ b/agent/repetition_guard.py
-@@ -9,7 +9,6 @@ conservative: only LONG verbatim repeats (60+ chars) covering a majority of the
- 
- from __future__ import annotations
- 
--import math
- from collections import Counter
- 
- # Below this length the check doesn't run: short truncations trivially
-@@ -71,16 +70,25 @@ def is_repetition_dominated(text: str) -> bool:
- 
- 
- def _window_count_dominated(text: str, n: int) -> bool:
--    """True when one 60-char window recurs often enough to cover half of ``text``."""
-+    """True when occurrences of one 60-char window actually cover half of ``text``."""
-     window = _REPEAT_WINDOW
--    needed = max(_MIN_REPEAT_COUNT, math.ceil(n * _DOMINANCE_RATIO / window))
--    counts: dict[str, int] = {}
-+    needed_coverage = n * _DOMINANCE_RATIO
-+    # Per key: occurrence count, union coverage, and last start. Starts arrive
-+    # in order, so only the part beyond the previous interval is newly covered.
-+    # This remains one linear scan with constant work per fixed-size window.
-+    counts: dict[str, tuple[int, int, int]] = {}
-     for i in range(n - window + 1):
-         key = text[i : i + window]
--        c = counts.get(key, 0) + 1
--        if c >= needed:
-+        previous = counts.get(key)
-+        if previous is None:
-+            count, covered = 1, window
-+        else:
-+            count, covered, last_start = previous
-+            count += 1
-+            covered += min(window, i - last_start)
-+        if count >= _MIN_REPEAT_COUNT and covered >= needed_coverage:
-             return True
--        counts[key] = c
-+        counts[key] = (count, covered, i)
-     return False
- 
- 
-diff --git a/agent/turn_final_response.py b/agent/turn_final_response.py
-index 265f1d7b..0c55efdc 100644
---- a/agent/turn_final_response.py
-+++ b/agent/turn_final_response.py
-@@ -86,9 +86,11 @@ def finish_text_response(
-         )
- 
-     # A leaked tool attempt must retry, not complete or recover from a cache.
--    from agent.agent_runtime_helpers import _DSML_LEAK_PATTERN
--    _dsml_candidates = [assistant_message.content]
--    if not agent._has_content_after_think_block(assistant_message.content or ""):
-+    from agent.agent_runtime_helpers import strip_private_reasoning
-+    from agent.dsml import has_unexecuted_dsml
-+    _visible_content = strip_private_reasoning(assistant_message.content or "")
-+    _dsml_candidates = [_visible_content]
-+    if not _visible_content.strip():
-         # Only consult alternate sources when they could become the answer;
-         # private reasoning or a stale cache must not discard a valid reply.
-         _dsml_candidates.extend((
-@@ -97,7 +99,7 @@ def finish_text_response(
-             getattr(agent, "_last_content_with_tools", ""),
-         ))
-     _dsml_leaked = not assistant_message.tool_calls and any(
--        isinstance(candidate, str) and _DSML_LEAK_PATTERN.search(candidate)
-+        isinstance(candidate, str) and has_unexecuted_dsml(strip_private_reasoning(candidate))
-         for candidate in _dsml_candidates
-     )
-     if _dsml_leaked:
-diff --git a/agent/turn_truncation.py b/agent/turn_truncation.py
-index 14218d09..ade6cfa7 100644
---- a/agent/turn_truncation.py
-+++ b/agent/turn_truncation.py
-@@ -314,8 +314,9 @@ def _continue_text(st: _Trunc, _retry: TurnRetryState, assistant_message: Any) -
-     st.length_continue_retries += 1
-     n = st.length_continue_retries
-     _interim_content = getattr(assistant_message, "content", None)
--    from agent.agent_runtime_helpers import _DSML_LEAK_PATTERN
--    if isinstance(_interim_content, str) and _DSML_LEAK_PATTERN.search(_interim_content):
-+    from agent.agent_runtime_helpers import strip_private_reasoning
-+    from agent.dsml import has_unexecuted_dsml
-+    if isinstance(_interim_content, str) and has_unexecuted_dsml(strip_private_reasoning(_interim_content)):
-         # An unexecuted tool serialization is not a recoverable answer fragment.
-         # Keep the existing bounded length retry, but never stitch/replay its body.
-         _interim_content = None
-diff --git a/hermes_cli/cli_render.py b/hermes_cli/cli_render.py
-index d87b80c5..13a194cd 100644
---- a/hermes_cli/cli_render.py
-+++ b/hermes_cli/cli_render.py
-@@ -63,14 +63,12 @@ def _strip_reasoning_tags(text: str) -> str:
-     )
-     # Stray closers and cut tool-call fragments share storage's compiled patterns (#101899, #102303).
-     from agent.agent_runtime_helpers import (
--        _DSML_BLOCK_PATTERN, _DSML_ORPHAN_CLOSER_PATTERN, _DSML_UNTERMINATED_PATTERN,
-         _STRAY_TOOL_CALL_CLOSER_PATTERN, _UNTERMINATED_TOOL_CALL_PATTERN,
-     )
--    for pattern in (_DSML_BLOCK_PATTERN, _STRAY_TOOL_CALL_CLOSER_PATTERN,
--                    _DSML_ORPHAN_CLOSER_PATTERN, _UNTERMINATED_TOOL_CALL_PATTERN,
--                    _DSML_UNTERMINATED_PATTERN):
-+    for pattern in (_STRAY_TOOL_CALL_CLOSER_PATTERN, _UNTERMINATED_TOOL_CALL_PATTERN):
-         cleaned = pattern.sub('', cleaned)
--    return cleaned.strip()
-+    from agent.dsml import sanitize_dsml
-+    return sanitize_dsml(cleaned).strip()
- 
- 
- def _assistant_content_as_text(content: Any) -> str:
-diff --git a/hermes_cli/config.py b/hermes_cli/config.py
-index ca35d36c..40664b33 100644
---- a/hermes_cli/config.py
-+++ b/hermes_cli/config.py
-@@ -248,7 +248,7 @@ def get_managed_update_command() -> Optional[str]:
- # "apt" is the Termux APT distribution identifier, not a generic Debian/Ubuntu signal; another
- # APT distribution needs its own method. "home-manager" is listed because the managed marker can
- # return it and a stamp must name every method this function returns.
--_SUPPORTED_INSTALL_METHODS = frozenset({"apt", "docker", "nix", "nixos", "home-manager", "git", "unknown"})
-+_SUPPORTED_INSTALL_METHODS = frozenset({"apt", "pacman", "docker", "nix", "nixos", "home-manager", "git", "unknown"})
- 
- 
- def _install_method_stamp(path: Path) -> Optional[str]:
-@@ -260,7 +260,7 @@ def _install_method_stamp(path: Path) -> Optional[str]:
- 
- 
- def detect_install_method(project_root: Optional[Path] = None) -> str:
--    """Detect how Hermes was installed: apt/docker/nix/nixos/home-manager/git/unknown.
-+    """Detect how Hermes was installed: apt/pacman/docker/nix/nixos/home-manager/git/unknown.
-     Order: code-scoped ``<install tree>/.install_method`` stamp (authoritative) -> legacy
-     ``$HERMES_HOME/.install_method`` -> managed marker -> /nix/store path -> .git dir -> unknown.
-     The stamp lives next to the code because HERMES_HOME is shared data: a container and a host
-@@ -326,6 +326,7 @@ def is_nix_install_method(method: str) -> bool:
- _UPDATE_COMMAND_BY_METHOD = {
-     "docker": "docker pull nousresearch/hermes-agent:latest",
-     "apt": "pkg upgrade hermes-agent",  # "apt" == Termux APT by contract; uses Termux's `pkg`.
-+    "pacman": "Update or reinstall the hermes-agent package through pacman.",
- }
- 
- 
-diff --git a/hermes_cli/doctor_platform.py b/hermes_cli/doctor_platform.py
-index ea759185..bd8a0454 100644
---- a/hermes_cli/doctor_platform.py
-+++ b/hermes_cli/doctor_platform.py
-@@ -23,7 +23,7 @@ def _python_repair_hint() -> str:
-     from hermes_cli.doctor import PROJECT_ROOT
- 
-     method = detect_install_method(PROJECT_ROOT)
--    if is_nix_install_method(method):
-+    if is_nix_install_method(method) or method == "pacman":
-         return recommended_update_command_for_method(method)
-     if method in ("docker", "apt"):
-         command = recommended_update_command_for_method(method)
-@@ -594,7 +594,7 @@ def _check_command_installation(should_fix: bool, f: Finding) -> None:
-     from hermes_cli.config import detect_install_method
- 
-     method = detect_install_method(PROJECT_ROOT)
--    if is_nix_install_method(method) or method in ("docker", "apt"):
-+    if is_nix_install_method(method) or method in ("docker", "apt", "pacman"):
-         command = shutil.which("hermes")
-         if command:
-             check_ok(f"Hermes command managed by {method} ({command})")
 diff --git a/agent/dsml.py b/agent/dsml.py
 new file mode 100644
-index 00000000..2cd394ed
+index 0000000000..a20efaac51
 --- /dev/null
 +++ b/agent/dsml.py
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,104 @@
 +"""Recognize unexecuted DSML, never parse it into executable tool calls.
 +
 +Only Markdown code is a protocol example. Outside code, even an inline or cut-off
@@ -282,9 +86,25 @@ index 00000000..2cd394ed
 +    fence_start = None
 +    fence_char = ""
 +    fence_size = 0
++    indented_start = None
++    previous_blank = True
 +    prose_start = 0
 +    offset = 0
 +    for line in text.splitlines(keepends=True):
++        blank = not line.strip()
++        indented = line.expandtabs(4).startswith("    ")
++        if fence_start is None:
++            if indented_start is not None and not (blank or indented):
++                yield indented_start, offset
++                indented_start = None
++                prose_start = offset
++            if indented_start is not None or (indented and not blank and previous_blank):
++                if indented_start is None:
++                    yield from _inline_code_spans(text, prose_start, offset)
++                    indented_start = offset
++                offset += len(line)
++                previous_blank = blank
++                continue
 +        match = _FENCE.match(line)
 +        if match and fence_start is None:
 +            marker, info = match.groups()
@@ -300,8 +120,11 @@ index 00000000..2cd394ed
 +                fence_start = None
 +                prose_start = offset + len(line)
 +        offset += len(line)
++        previous_blank = blank
 +    if fence_start is not None:
 +        yield fence_start, len(text)
++    elif indented_start is not None:
++        yield indented_start, len(text)
 +    else:
 +        yield from _inline_code_spans(text, prose_start, len(text))
 +
@@ -323,3 +146,184 @@ index 00000000..2cd394ed
 +def sanitize_dsml(text: str) -> str:
 +    """Never salvage narration or unknown argument tails from an unexecuted attempt."""
 +    return "" if has_unexecuted_dsml(text) else text
+diff --git a/agent/repetition_guard.py b/agent/repetition_guard.py
+index a2df72c9c3..0a6b392724 100644
+--- a/agent/repetition_guard.py
++++ b/agent/repetition_guard.py
+@@ -9,7 +9,6 @@ conservative: only LONG verbatim repeats (60+ chars) covering a majority of the
+ 
+ from __future__ import annotations
+ 
+-import math
+ from collections import Counter
+ 
+ # Below this length the check doesn't run: short truncations trivially
+@@ -71,16 +70,25 @@ def is_repetition_dominated(text: str) -> bool:
+ 
+ 
+ def _window_count_dominated(text: str, n: int) -> bool:
+-    """True when one 60-char window recurs often enough to cover half of ``text``."""
++    """True when occurrences of one 60-char window actually cover half of ``text``."""
+     window = _REPEAT_WINDOW
+-    needed = max(_MIN_REPEAT_COUNT, math.ceil(n * _DOMINANCE_RATIO / window))
+-    counts: dict[str, int] = {}
++    needed_coverage = n * _DOMINANCE_RATIO
++    # Per key: occurrence count, union coverage, and last start. Starts arrive
++    # in order, so only the part beyond the previous interval is newly covered.
++    # This remains one linear scan with constant work per fixed-size window.
++    counts: dict[str, tuple[int, int, int]] = {}
+     for i in range(n - window + 1):
+         key = text[i : i + window]
+-        c = counts.get(key, 0) + 1
+-        if c >= needed:
++        previous = counts.get(key)
++        if previous is None:
++            count, covered = 1, window
++        else:
++            count, covered, last_start = previous
++            count += 1
++            covered += min(window, i - last_start)
++        if count >= _MIN_REPEAT_COUNT and covered >= needed_coverage:
+             return True
+-        counts[key] = c
++        counts[key] = (count, covered, i)
+     return False
+ 
+ 
+diff --git a/agent/turn_final_response.py b/agent/turn_final_response.py
+index 8b0c9b1493..0c55efdc2c 100644
+--- a/agent/turn_final_response.py
++++ b/agent/turn_final_response.py
+@@ -85,6 +85,30 @@ def finish_text_response(
+             result=result,
+         )
+ 
++    # A leaked tool attempt must retry, not complete or recover from a cache.
++    from agent.agent_runtime_helpers import strip_private_reasoning
++    from agent.dsml import has_unexecuted_dsml
++    _visible_content = strip_private_reasoning(assistant_message.content or "")
++    _dsml_candidates = [_visible_content]
++    if not _visible_content.strip():
++        # Only consult alternate sources when they could become the answer;
++        # private reasoning or a stale cache must not discard a valid reply.
++        _dsml_candidates.extend((
++            agent._extract_reasoning(assistant_message),
++            getattr(agent, "_current_streamed_assistant_text", ""),
++            getattr(agent, "_last_content_with_tools", ""),
++        ))
++    _dsml_leaked = not assistant_message.tool_calls and any(
++        isinstance(candidate, str) and has_unexecuted_dsml(strip_private_reasoning(candidate))
++        for candidate in _dsml_candidates
++    )
++    if _dsml_leaked:
++        logger.warning("Unparsed DSML tool attempt: entering empty-response recovery")
++        assistant_message.content = ""
++        agent._current_streamed_assistant_text = ""
++        agent._last_content_with_tools = None
++        agent._last_content_tools_all_housekeeping = False
++
+     # Reasoning-only clean stop on a trusted route (elsewhere reasoning is private and takes the
+     # ladder): some parsers (vLLM nemotron_v3 past ~500K prompt tokens) file the whole answer as
+     # reasoning when the closing delimiter is missing; ``stop`` means generation is complete, so
+@@ -101,6 +125,7 @@ def finish_text_response(
+     _promoted = None
+     if (
+         finish_reason == "stop"
++        and not _dsml_leaked
+         and not assistant_message.tool_calls
+         and (_content is None or (isinstance(_content, str) and not _content.strip()))
+         and not any(
+diff --git a/agent/turn_truncation.py b/agent/turn_truncation.py
+index 190bff1fcc..ade6cfa7b1 100644
+--- a/agent/turn_truncation.py
++++ b/agent/turn_truncation.py
+@@ -314,6 +314,15 @@ def _continue_text(st: _Trunc, _retry: TurnRetryState, assistant_message: Any) -
+     st.length_continue_retries += 1
+     n = st.length_continue_retries
+     _interim_content = getattr(assistant_message, "content", None)
++    from agent.agent_runtime_helpers import strip_private_reasoning
++    from agent.dsml import has_unexecuted_dsml
++    if isinstance(_interim_content, str) and has_unexecuted_dsml(strip_private_reasoning(_interim_content)):
++        # An unexecuted tool serialization is not a recoverable answer fragment.
++        # Keep the existing bounded length retry, but never stitch/replay its body.
++        _interim_content = None
++        agent._current_streamed_assistant_text = ""
++        agent._last_content_with_tools = None
++        agent._last_content_tools_all_housekeeping = False
+     if not _interim_content and not st.is_stub:
+         # Thinking-only truncation: continuing with thinking ON re-burns the budget.
+         agent._ephemeral_reasoning_off = True
+diff --git a/hermes_cli/cli_render.py b/hermes_cli/cli_render.py
+index f52ab7c294..971c179f31 100644
+--- a/hermes_cli/cli_render.py
++++ b/hermes_cli/cli_render.py
+@@ -62,10 +62,13 @@ def _strip_reasoning_tags(text: str) -> str:
+         '', cleaned, flags=re.DOTALL | re.IGNORECASE,
+     )
+     # Stray closers and cut tool-call fragments share storage's compiled patterns (#101899, #102303).
+-    from agent.agent_runtime_helpers import _STRAY_TOOL_CALL_CLOSER_PATTERN, _UNTERMINATED_TOOL_CALL_PATTERN
+-    cleaned = _STRAY_TOOL_CALL_CLOSER_PATTERN.sub('', cleaned)
+-    cleaned = _UNTERMINATED_TOOL_CALL_PATTERN.sub('', cleaned)
+-    return cleaned.strip()
++    from agent.agent_runtime_helpers import (
++        _STRAY_TOOL_CALL_CLOSER_PATTERN, _UNTERMINATED_TOOL_CALL_PATTERN,
++    )
++    for pattern in (_STRAY_TOOL_CALL_CLOSER_PATTERN, _UNTERMINATED_TOOL_CALL_PATTERN):
++        cleaned = pattern.sub('', cleaned)
++    from agent.dsml import sanitize_dsml
++    return sanitize_dsml(cleaned).strip()
+ 
+ 
+ def _assistant_content_as_text(content: Any) -> str:
+diff --git a/hermes_cli/config.py b/hermes_cli/config.py
+index 9a13eb8332..fb3a81182f 100644
+--- a/hermes_cli/config.py
++++ b/hermes_cli/config.py
+@@ -248,7 +248,7 @@ def get_managed_update_command() -> Optional[str]:
+ # "apt" is the Termux APT distribution identifier, not a generic Debian/Ubuntu signal; another
+ # APT distribution needs its own method. "home-manager" is listed because the managed marker can
+ # return it and a stamp must name every method this function returns.
+-_SUPPORTED_INSTALL_METHODS = frozenset({"apt", "docker", "nix", "nixos", "home-manager", "git", "unknown"})
++_SUPPORTED_INSTALL_METHODS = frozenset({"apt", "pacman", "docker", "nix", "nixos", "home-manager", "git", "unknown"})
+ 
+ 
+ def _install_method_stamp(path: Path) -> Optional[str]:
+@@ -260,7 +260,7 @@ def _install_method_stamp(path: Path) -> Optional[str]:
+ 
+ 
+ def detect_install_method(project_root: Optional[Path] = None) -> str:
+-    """Detect how Hermes was installed: apt/docker/nix/nixos/home-manager/git/unknown.
++    """Detect how Hermes was installed: apt/pacman/docker/nix/nixos/home-manager/git/unknown.
+     Order: code-scoped ``<install tree>/.install_method`` stamp (authoritative) -> legacy
+     ``$HERMES_HOME/.install_method`` -> managed marker -> /nix/store path -> .git dir -> unknown.
+     The stamp lives next to the code because HERMES_HOME is shared data: a container and a host
+@@ -326,6 +326,7 @@ def is_nix_install_method(method: str) -> bool:
+ _UPDATE_COMMAND_BY_METHOD = {
+     "docker": "docker pull nousresearch/hermes-agent:latest",
+     "apt": "pkg upgrade hermes-agent",  # "apt" == Termux APT by contract; uses Termux's `pkg`.
++    "pacman": "Update or reinstall the hermes-agent package through pacman.",
+ }
+ 
+ 
+diff --git a/hermes_cli/doctor_platform.py b/hermes_cli/doctor_platform.py
+index ea75918596..bd8a045426 100644
+--- a/hermes_cli/doctor_platform.py
++++ b/hermes_cli/doctor_platform.py
+@@ -23,7 +23,7 @@ def _python_repair_hint() -> str:
+     from hermes_cli.doctor import PROJECT_ROOT
+ 
+     method = detect_install_method(PROJECT_ROOT)
+-    if is_nix_install_method(method):
++    if is_nix_install_method(method) or method == "pacman":
+         return recommended_update_command_for_method(method)
+     if method in ("docker", "apt"):
+         command = recommended_update_command_for_method(method)
+@@ -594,7 +594,7 @@ def _check_command_installation(should_fix: bool, f: Finding) -> None:
+     from hermes_cli.config import detect_install_method
+ 
+     method = detect_install_method(PROJECT_ROOT)
+-    if is_nix_install_method(method) or method in ("docker", "apt"):
++    if is_nix_install_method(method) or method in ("docker", "apt", "pacman"):
+         command = shutil.which("hermes")
+         if command:
+             check_ok(f"Hermes command managed by {method} ({command})")

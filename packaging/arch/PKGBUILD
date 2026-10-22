@@ -1,10 +1,10 @@
 # Adapted from AUR hermes-agent 0.22.2 by Youcef/Evert;
 # system-tools.py and interpreter patch from jabla/hermes-agent-bin.
 pkgname=hermes-agent
-_commit=3771e9accd0aa8a084d2c30250601ebdb84e82e6
-_commit_date=1792598202
-pkgver=0.22.2
-pkgrel=6
+_commit=4d04303818b61bf3aa09278af48356315515965b
+_commit_date=1792599405
+pkgver=0.22.4
+pkgrel=1
 pkgdesc="Locally-run AI agent with tool use, web browsing, and automation"
 arch=('x86_64')
 url="https://github.com/VKKKV/hermes-agent"
@@ -23,23 +23,23 @@ optdepends=(
     'chromium: local browser automation (or google-chrome)'
     'google-chrome: local browser automation (or chromium)'
 )
-makedepends=('cmake')
+makedepends=('cmake' 'git')
 options=('!strip' '!debug')
 source=(
-    "${pkgname}-${_commit}.tar.gz::${url}/archive/${_commit}.tar.gz"
+    "${pkgname}::git+https://github.com/NousResearch/hermes-agent.git#commit=${_commit}"
     'keep-venv-interpreter.patch'
     'system-tools.py'
     'posix-log-rotation.patch'
     'runtime-repairs.patch'
 )
-sha256sums=('637009148650d7203ba372a77fdc8ce8cfe40795ca0479991acc55eef7ea4786'
+sha256sums=('SKIP'
             '516bee4492e4d6f6e4310703bdec7e88229a1b0ddb828542f297d4e6e226c427'
             '5950d73a49526767dfac20084d8c5597b7ebf5c16e7bff99e31dc4d7fe0d139d'
-            '30b198697ac71e1b62ab787c9d0e4dcf8a627b67cc8a5aa5f4a4d34a7a38862e'
-            '89b98f514c43dc4531c586e6c523f0a64689e5370c81fc8513c37f05d3f93801')
+            '7bc4008a4562517f2da3341394dc9781f52a920f2b9968f9b8a3ba184b25e0a1'
+            '6295deff939e050b0650095b1d04124395e587761043ffab29842d4472299f05')
 
 prepare() {
-  cd "${pkgname}-${_commit}"
+  cd "${pkgname}"
 
   patch --batch --fuzz=0 -Np1 -i "${srcdir}/keep-venv-interpreter.patch"
   patch --batch --fuzz=0 -Np1 -i "${srcdir}/posix-log-rotation.patch"
@@ -47,7 +47,7 @@ prepare() {
 }
 
 build() {
-  cd "${pkgname}-${_commit}"
+  cd "${pkgname}"
 
   [ ! -d .git ] && mkdir .git
 
@@ -81,7 +81,7 @@ build() {
 }
 
 check() {
-  cd "${pkgname}-${_commit}"
+  cd "${pkgname}"
   export HERMES_HOME="${srcdir}/check-home"
   export HERMES_DISABLE_LAZY_INSTALLS=1
   export PYTHONDONTWRITEBYTECODE=1
@@ -94,7 +94,7 @@ check() {
 }
 
 package() {
-  cd "${pkgname}-${_commit}"
+  cd "${pkgname}"
 
   _optdir="$pkgdir/opt/$pkgname"
   install -d "$_optdir"
@@ -127,10 +127,10 @@ package() {
   "schemaVersion": 2,
   "commit": "${_commit}",
   "commitDate": ${_commit_date},
-  "branch": "kita/arch-dsml",
+  "branch": "release/v0.22.4",
   "builtAt": "${_built_at}",
   "dirty": false,
-  "source": "github-fork",
+  "source": "github-upstream",
   "distribution": "package-manager",
   "updateMechanism": "external",
   "runtimeDir": "${_runtime_dir}",
