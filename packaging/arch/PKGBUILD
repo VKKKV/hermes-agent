@@ -4,7 +4,7 @@ pkgname=hermes-agent
 _commit=3771e9accd0aa8a084d2c30250601ebdb84e82e6
 _commit_date=1792598202
 pkgver=0.22.2
-pkgrel=4
+pkgrel=6
 pkgdesc="Locally-run AI agent with tool use, web browsing, and automation"
 arch=('x86_64')
 url="https://github.com/VKKKV/hermes-agent"
@@ -29,15 +29,21 @@ source=(
     "${pkgname}-${_commit}.tar.gz::${url}/archive/${_commit}.tar.gz"
     'keep-venv-interpreter.patch'
     'system-tools.py'
+    'posix-log-rotation.patch'
+    'runtime-repairs.patch'
 )
 sha256sums=('637009148650d7203ba372a77fdc8ce8cfe40795ca0479991acc55eef7ea4786'
             '516bee4492e4d6f6e4310703bdec7e88229a1b0ddb828542f297d4e6e226c427'
-            '5950d73a49526767dfac20084d8c5597b7ebf5c16e7bff99e31dc4d7fe0d139d')
+            '5950d73a49526767dfac20084d8c5597b7ebf5c16e7bff99e31dc4d7fe0d139d'
+            '30b198697ac71e1b62ab787c9d0e4dcf8a627b67cc8a5aa5f4a4d34a7a38862e'
+            '89b98f514c43dc4531c586e6c523f0a64689e5370c81fc8513c37f05d3f93801')
 
 prepare() {
   cd "${pkgname}-${_commit}"
 
   patch --batch --fuzz=0 -Np1 -i "${srcdir}/keep-venv-interpreter.patch"
+  patch --batch --fuzz=0 -Np1 -i "${srcdir}/posix-log-rotation.patch"
+  patch --batch --fuzz=0 -Np1 -i "${srcdir}/runtime-repairs.patch"
 }
 
 build() {
@@ -62,6 +68,7 @@ build() {
       --extra all \
       --extra messaging \
       --extra anthropic \
+      --extra exa \
       --extra edge-tts \
       --extra ddgs \
       --extra doc-extract \
@@ -83,7 +90,7 @@ check() {
   test -s hermes_cli/web_dist/index.html
   test -s ui-tui/dist/entry.js
   PYTHONPATH="$PWD" venv/bin/python -c \
-    'import hermes_cli.main, anthropic, edge_tts, ddgs, lark_oapi, mautrix, defusedxml'
+    'import hermes_cli.main, anthropic, exa_py, edge_tts, ddgs, lark_oapi, mautrix, defusedxml'
 }
 
 package() {
@@ -129,12 +136,14 @@ package() {
   "runtimeDir": "${_runtime_dir}",
   "baseVersion": "${pkgver}",
   "displayVersion": "${pkgver}+kita.dsml",
+  "localPatches": ["posix-log-rotation", "runtime-repairs"],
   "distance": 0,
   "payload": "bootstrap",
   "tag": null
 }
 EOF
 
+  printf '%s\n' pacman > "$_optdir/.install_method"
   venv/bin/python -B "${srcdir}/system-tools.py" "$_optdir" "$_optdir/system-store/tools"
 
   install -d "$_optdir/venv/lib/python3.14/site-packages"
@@ -163,7 +172,7 @@ EOF
     echo 'if [[ -z "${AGENT_BROWSER_EXECUTABLE_PATH:-}" ]]; then'
     echo '  printf "%s\n" "hermes: No Chrome/Chromium on PATH. Install chromium or google-chrome, or set AGENT_BROWSER_EXECUTABLE_PATH. Browser downloads are disabled." >&2'
     echo 'fi'
-    echo "exec /opt/$pkgname/venv/bin/python -m hermes_cli.main" '"$@"'
+    echo "exec /opt/$pkgname/venv/bin/python -I -m hermes_cli.main" '"$@"'
   } > "$pkgdir/usr/bin/hermes"
 
   chmod 755 "$pkgdir/usr/bin/hermes"

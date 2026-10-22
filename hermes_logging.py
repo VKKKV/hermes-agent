@@ -462,9 +462,12 @@ class _ManagedRotatingFileHandler(RotatingFileHandler):
                 pass
 
     def _record_stream_stat(self, st: Optional[os.stat_result] = None) -> None:
-        """Snapshot dev/ino of ``baseFilename`` so emit() can detect external rotation."""
+        """Snapshot the open stream's dev/ino, not a path another process may replace."""
         try:
-            st = st or os.stat(self.baseFilename)
+            if self.stream is not None:
+                st = os.fstat(self.stream.fileno())
+            else:
+                st = st or os.stat(self.baseFilename)
             self._stat_dev, self._stat_ino = st.st_dev, st.st_ino
         except OSError:
             self._stat_dev, self._stat_ino = None, None
@@ -504,6 +507,43 @@ class _ManagedRotatingFileHandler(RotatingFileHandler):
             self._reopen_stream(st)
 
     def emit(self, record: logging.LogRecord) -> None:
+        if sys.platform == "win32":
+            # CLH already owns the cross-process lock on Windows.
+            self._emit_record(record)
+            return
+
+        import fcntl
+
+        # Use a persistent sidecar: locking the log inode fails across rename, and
+        # opening the directory itself would require read permission beyond w+x.
+        # Open per emit so forked workers never share flock's open description.
+        # Never unlink this file: every writer must lock the same stable inode.
+        self.skipped_missing_dir = False
+        directory = os.path.dirname(self.baseFilename)
+        lock_path = os.path.join(directory, f".{os.path.basename(self.baseFilename)}.lock")
+        fd = None
+        try:
+            flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(lock_path, flags, 0o660 if self._managed else 0o666)
+            if self._managed:
+                # Match log-file group sharing even with a restrictive process umask.
+                with contextlib.suppress(OSError):
+                    os.fchmod(fd, 0o660)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            self._emit_record(record)
+        except Exception:
+            if self._skip_write_when_dir_missing and not os.path.isdir(directory):
+                if self.stream is not None:
+                    _quietly(self.stream.close)
+                self.stream = None
+                self.skipped_missing_dir = True
+            else:
+                self.handleError(record)
+        finally:
+            if fd is not None:
+                os.close(fd)  # also releases flock, including on a failed emit
+
+    def _emit_record(self, record: logging.LogRecord) -> None:
         self.skipped_missing_dir = False
         had_stream = self.stream is not None
         # The kernel caches inode metadata, so this stat is sub-microsecond on a hot file.

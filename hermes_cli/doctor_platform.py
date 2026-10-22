@@ -23,7 +23,7 @@ def _python_repair_hint() -> str:
     from hermes_cli.doctor import PROJECT_ROOT
 
     method = detect_install_method(PROJECT_ROOT)
-    if is_nix_install_method(method):
+    if is_nix_install_method(method) or method == "pacman":
         return recommended_update_command_for_method(method)
     if method in ("docker", "apt"):
         command = recommended_update_command_for_method(method)
@@ -594,7 +594,7 @@ def _check_command_installation(should_fix: bool, f: Finding) -> None:
     from hermes_cli.config import detect_install_method
 
     method = detect_install_method(PROJECT_ROOT)
-    if is_nix_install_method(method) or method in ("docker", "apt"):
+    if is_nix_install_method(method) or method in ("docker", "apt", "pacman"):
         command = shutil.which("hermes")
         if command:
             check_ok(f"Hermes command managed by {method} ({command})")

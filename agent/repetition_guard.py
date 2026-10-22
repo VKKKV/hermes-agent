@@ -9,7 +9,6 @@ conservative: only LONG verbatim repeats (60+ chars) covering a majority of the 
 
 from __future__ import annotations
 
-import math
 from collections import Counter
 
 # Below this length the check doesn't run: short truncations trivially
@@ -71,16 +70,25 @@ def is_repetition_dominated(text: str) -> bool:
 
 
 def _window_count_dominated(text: str, n: int) -> bool:
-    """True when one 60-char window recurs often enough to cover half of ``text``."""
+    """True when occurrences of one 60-char window actually cover half of ``text``."""
     window = _REPEAT_WINDOW
-    needed = max(_MIN_REPEAT_COUNT, math.ceil(n * _DOMINANCE_RATIO / window))
-    counts: dict[str, int] = {}
+    needed_coverage = n * _DOMINANCE_RATIO
+    # Per key: occurrence count, union coverage, and last start. Starts arrive
+    # in order, so only the part beyond the previous interval is newly covered.
+    # This remains one linear scan with constant work per fixed-size window.
+    counts: dict[str, tuple[int, int, int]] = {}
     for i in range(n - window + 1):
         key = text[i : i + window]
-        c = counts.get(key, 0) + 1
-        if c >= needed:
+        previous = counts.get(key)
+        if previous is None:
+            count, covered = 1, window
+        else:
+            count, covered, last_start = previous
+            count += 1
+            covered += min(window, i - last_start)
+        if count >= _MIN_REPEAT_COUNT and covered >= needed_coverage:
             return True
-        counts[key] = c
+        counts[key] = (count, covered, i)
     return False
 
 

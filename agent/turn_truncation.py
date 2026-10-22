@@ -314,8 +314,9 @@ def _continue_text(st: _Trunc, _retry: TurnRetryState, assistant_message: Any) -
     st.length_continue_retries += 1
     n = st.length_continue_retries
     _interim_content = getattr(assistant_message, "content", None)
-    from agent.agent_runtime_helpers import _DSML_LEAK_PATTERN
-    if isinstance(_interim_content, str) and _DSML_LEAK_PATTERN.search(_interim_content):
+    from agent.agent_runtime_helpers import strip_private_reasoning
+    from agent.dsml import has_unexecuted_dsml
+    if isinstance(_interim_content, str) and has_unexecuted_dsml(strip_private_reasoning(_interim_content)):
         # An unexecuted tool serialization is not a recoverable answer fragment.
         # Keep the existing bounded length retry, but never stitch/replay its body.
         _interim_content = None

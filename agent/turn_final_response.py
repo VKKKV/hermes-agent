@@ -86,9 +86,11 @@ def finish_text_response(
         )
 
     # A leaked tool attempt must retry, not complete or recover from a cache.
-    from agent.agent_runtime_helpers import _DSML_LEAK_PATTERN
-    _dsml_candidates = [assistant_message.content]
-    if not agent._has_content_after_think_block(assistant_message.content or ""):
+    from agent.agent_runtime_helpers import strip_private_reasoning
+    from agent.dsml import has_unexecuted_dsml
+    _visible_content = strip_private_reasoning(assistant_message.content or "")
+    _dsml_candidates = [_visible_content]
+    if not _visible_content.strip():
         # Only consult alternate sources when they could become the answer;
         # private reasoning or a stale cache must not discard a valid reply.
         _dsml_candidates.extend((
@@ -97,7 +99,7 @@ def finish_text_response(
             getattr(agent, "_last_content_with_tools", ""),
         ))
     _dsml_leaked = not assistant_message.tool_calls and any(
-        isinstance(candidate, str) and _DSML_LEAK_PATTERN.search(candidate)
+        isinstance(candidate, str) and has_unexecuted_dsml(strip_private_reasoning(candidate))
         for candidate in _dsml_candidates
     )
     if _dsml_leaked:

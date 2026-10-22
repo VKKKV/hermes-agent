@@ -50,31 +50,6 @@ _TOOL_CALL_BLOCK_PATTERNS = tuple(
     for name in _TOOL_CALL_TAG_NAMES
 )
 
-# DSML leaked by compatible providers is not visible assistant content.
-_DSML_PIPE = r'[|\uFF5C]{1,2}[ \t]*'
-_DSML_KINDS = r'(?:calls|tool_calls|function_calls|invoke|parameter)'
-_DSML_BLOCK_PATTERN = re.compile(
-    rf'<{_DSML_PIPE}DSML{_DSML_PIPE}(calls|tool_calls|function_calls|invoke|parameter)(?=[\s>])[^>]*>'
-    # Stop at repeated openers to avoid quadratic suffix scans.
-    rf'(?:(?!</?{_DSML_PIPE}DSML{_DSML_PIPE}\1(?=[\s>])).)*'
-    rf'</{_DSML_PIPE}DSML{_DSML_PIPE}\1>',
-    re.DOTALL | re.IGNORECASE,
-)
-# Only a trailing protocol envelope, not a backtick-quoted inline explanation.
-_DSML_ORPHAN_CLOSER_PATTERN = re.compile(
-    rf'</{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}>[ \t]*(?=\r?$|</)', re.IGNORECASE | re.MULTILINE
-)
-_DSML_UNTERMINATED_PATTERN = re.compile(
-    rf'(?:^|\n)[ \t]*<{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}(?=[\s>]|\Z).*$',
-    re.DOTALL | re.IGNORECASE,
-)
-
-# Unexecuted protocol payload, including orphan trailing closers.
-_DSML_LEAK_PATTERN = re.compile(
-    rf'(?:^|\n)[ \t]*<{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}(?=[\s>]|\Z)'
-    rf'|</{_DSML_PIPE}DSML{_DSML_PIPE}{_DSML_KINDS}>\s*\Z', re.IGNORECASE,
-)
-
 # Named <function name=...> blocks; boundary- and name-gated (see _THINK_STRIP_PATTERNS note).
 _NAMED_FUNCTION_BLOCK_PATTERN = re.compile(
     r'(?:(?<=^)|(?<=[\n\r.!?:]))[ \t]*'
@@ -863,12 +838,20 @@ def _flatten_content_text(content: Any) -> str:
 # tool-call CLOSERS only (bare/unterminated <function> is kept: a truncated streaming tail may still
 # be valuable, matching OpenClaw's asymmetry).
 _THINK_STRIP_PATTERNS = (
-    *_REASONING_BLOCK_PATTERNS, *_TOOL_CALL_BLOCK_PATTERNS, _DSML_BLOCK_PATTERN,
+    *_REASONING_BLOCK_PATTERNS, *_TOOL_CALL_BLOCK_PATTERNS,
     _NAMED_FUNCTION_BLOCK_PATTERN,
     _UNTERMINATED_REASONING_BLOCK_PATTERN, _ORPHAN_REASONING_TAG_PATTERN,
-    _STRAY_TOOL_CALL_CLOSER_PATTERN, _DSML_ORPHAN_CLOSER_PATTERN,
-    _UNTERMINATED_TOOL_CALL_PATTERN, _DSML_UNTERMINATED_PATTERN,
+    _STRAY_TOOL_CALL_CLOSER_PATTERN, _UNTERMINATED_TOOL_CALL_PATTERN,
 )
+
+
+def strip_private_reasoning(content: Any) -> str:
+    """Hide private thinking without erasing DSML needed by recovery classification."""
+    content = _flatten_content_text(content) if content else ""
+    for pattern in (*_REASONING_BLOCK_PATTERNS, _UNTERMINATED_REASONING_BLOCK_PATTERN,
+                    _ORPHAN_REASONING_TAG_PATTERN):
+        content = pattern.sub('', content)
+    return content
 
 
 def strip_think_blocks(agent, content: str) -> str:
@@ -879,7 +862,8 @@ def strip_think_blocks(agent, content: str) -> str:
     content = _flatten_content_text(content) if content else ""
     for pattern in _THINK_STRIP_PATTERNS if content else ():
         content = pattern.sub('', content)
-    return content
+    from agent.dsml import sanitize_dsml
+    return sanitize_dsml(content)
 
 
 def sync_credential_pool_entry_id(agent) -> None:

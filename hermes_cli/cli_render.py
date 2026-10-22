@@ -63,14 +63,12 @@ def _strip_reasoning_tags(text: str) -> str:
     )
     # Stray closers and cut tool-call fragments share storage's compiled patterns (#101899, #102303).
     from agent.agent_runtime_helpers import (
-        _DSML_BLOCK_PATTERN, _DSML_ORPHAN_CLOSER_PATTERN, _DSML_UNTERMINATED_PATTERN,
         _STRAY_TOOL_CALL_CLOSER_PATTERN, _UNTERMINATED_TOOL_CALL_PATTERN,
     )
-    for pattern in (_DSML_BLOCK_PATTERN, _STRAY_TOOL_CALL_CLOSER_PATTERN,
-                    _DSML_ORPHAN_CLOSER_PATTERN, _UNTERMINATED_TOOL_CALL_PATTERN,
-                    _DSML_UNTERMINATED_PATTERN):
+    for pattern in (_STRAY_TOOL_CALL_CLOSER_PATTERN, _UNTERMINATED_TOOL_CALL_PATTERN):
         cleaned = pattern.sub('', cleaned)
-    return cleaned.strip()
+    from agent.dsml import sanitize_dsml
+    return sanitize_dsml(cleaned).strip()
 
 
 def _assistant_content_as_text(content: Any) -> str:
